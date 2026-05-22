@@ -1,0 +1,4 @@
+torch 2.9.0
+torch_musa 2.9.0+0680da1
+device_count 1
+device0_mem_gib 79.31 79.91

@@ -1,0 +1,650 @@
+[
+  {
+    "index": 1,
+    "start_line": 696,
+    "end_line": 818,
+    "returncode": 0,
+    "stdout": "input_ids shape=(4,), dtype=int64, device=musa:0, value=[11, 12, 13, 0]\ncaptured.req_pool_indices shape=(2,), dtype=int64, device=musa:0, value=[7, 8]\ncaptured.seq_lens shape=(2,), dtype=int32, device=musa:0, value=[5, 6]\ncaptured.out_cache_loc shape=(4,), dtype=int64, device=musa:0, value=[100, 101, 102, 0]\ngraph_out shape=(2, 2), dtype=float32, device=musa:0, value=[[9.0, 9.0], [9.0, 9.0]]\nhc_y shape=(2, 3), dtype=float32, device=musa:0, value=[[2.9752485752105713, 4.827154636383057, 6.679060459136963], [14.002138137817383, 15.838565826416016, 17.674991607666016]]\npost shape=(2, 2), dtype=float32, device=musa:0, value=[[0.9995744824409485, 0.9999781847000122], [0.999838650226593, 0.999995231628418]]\ncomb shape=(2, 2, 2), dtype=float32, device=musa:0, value=[[[0.002611535834148526, 0.0026115409564226866], [0.9973884224891663, 0.9973884224891663]], [[0.0008589610224589705, 0.0008589592762291431], [0.9991409778594971, 0.9991409778594971]]]\nhc_post shape=(2, 2, 3), dtype=float32, device=musa:0, value=[[[5.9661478996276855, 8.817265510559082, 11.668384552001953], [5.967349052429199, 8.819214820861816, 11.671079635620117]], [[22.99730110168457, 25.833431243896484, 28.66956329345703], [22.999492645263672, 25.835912704467773, 28.67232894897461]]]\nswiglu_out shape=(1, 2), dtype=float32, device=musa:0, value=[[7.310585975646973, 2.3840584754943848]]\n",
+    "stderr": ""
+  },
+  {
+    "index": 2,
+    "start_line": 843,
+    "end_line": 873,
+    "returncode": 0,
+    "stdout": "positions shape=(3,), dtype=int64, device=musa:0, value=[1, 2, 1]\nreq_pool_indices shape=(3,), dtype=int64, device=musa:0, value=[0, 0, 1]\nout_cache_loc shape=(3,), dtype=int64, device=musa:0, value=[10, 11, 20]\n",
+    "stderr": ""
+  },
+  {
+    "index": 3,
+    "start_line": 891,
+    "end_line": 928,
+    "returncode": 0,
+    "stdout": "input_ids shape=(4,), dtype=float32, device=musa:0, value=[5.0, 6.0, 0.0, 0.0]\npositions shape=(4,), dtype=float32, device=musa:0, value=[9.0, 10.0, 0.0, 0.0]\nlogits shape=(4, 3), dtype=float32, device=musa:0, value=[[9.5, 14.5, 19.5], [10.600000381469727, 16.200000762939453, 21.799999237060547], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]\n",
+    "stderr": ""
+  },
+  {
+    "index": 4,
+    "start_line": 946,
+    "end_line": 968,
+    "returncode": 0,
+    "stdout": "page_idx shape=(3,), dtype=int64, device=musa:0, value=[0, 2, 2]\npage_offset shape=(3,), dtype=int64, device=musa:0, value=[1, 0, 1]\nselected shape=(3, 1, 2), dtype=float32, device=musa:0, value=[[[1.0, 1.5]], [[2.0, 2.5]], [[3.0, 3.5]]]\nkv_cache shape=(3, 2, 1, 2), dtype=float32, device=musa:0, value=[[[[0.0, 0.0]], [[1.0, 1.5]]], [[[0.0, 0.0]], [[0.0, 0.0]]], [[[2.0, 2.5]], [[3.0, 3.5]]]]\n",
+    "stderr": ""
+  },
+  {
+    "index": 5,
+    "start_line": 987,
+    "end_line": 1007,
+    "returncode": 0,
+    "stdout": "topk_ids shape=(3, 2), dtype=int64, device=musa:0, value=[[1, 0], [0, 2], [2, 1]]\ntopk_vals shape=(3, 2), dtype=float32, device=musa:0, value=[[0.8437947034835815, 0.11419519037008286], [0.546549379825592, 0.3314989507198334], [0.9362395405769348, 0.04661262407898903]]\ncombined shape=(3, 2), dtype=float32, device=musa:0, value=[[1.801784634590149, 3.603569269180298], [4.623138427734375, 6.1641845703125], [14.509719848632812, 17.411663055419922]]\n",
+    "stderr": ""
+  },
+  {
+    "index": 6,
+    "start_line": 1025,
+    "end_line": 1046,
+    "returncode": 0,
+    "stdout": "topk_ids shape=(2, 2), dtype=int64, device=musa:0, value=[[1, 2], [2, 3]]\ntopk_vals shape=(2, 2), dtype=float32, device=musa:0, value=[[6.0, 4.0], [8.0, 2.0]]\nprobs shape=(2, 2), dtype=float32, device=musa:0, value=[[0.8807970285415649, 0.11920291185379028], [0.9975274205207825, 0.0024726237170398235]]\nnext_token_cpu [1, 2]\n",
+    "stderr": ""
+  },
+  {
+    "index": 7,
+    "start_line": 1167,
+    "end_line": 1197,
+    "returncode": 0,
+    "stdout": "x shape=(2, 3), dtype=float32, device=musa:0, value=[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]\nout shape=(2, 2), dtype=float32, device=musa:0, value=[[13.999988555908203, 6.993622779846191], [32.0, 15.999998092651367]]\n",
+    "stderr": ""
+  },
+  {
+    "index": 8,
+    "start_line": 1212,
+    "end_line": 1268,
+    "returncode": 0,
+    "stdout": "x shape=(2, 2), dtype=float32, device=musa:0, value=[[2.0, 1.0], [3.0, 4.0]]\nmid shape=(2, 2), dtype=float32, device=musa:0, value=[[2.5, 0.0], [5.0, 5.0]]\nout shape=(2, 2), dtype=float32, device=musa:0, value=[[3.5, 1.0], [6.0, 6.0]]\n",
+    "stderr": ""
+  },
+  {
+    "index": 9,
+    "start_line": 1284,
+    "end_line": 1306,
+    "returncode": 0,
+    "stdout": "out shape=(2, 2), dtype=float32, device=musa:0, value=[[2.835296630859375, 3.9485244750976562], [5.9933061599731445, 5.9933061599731445]]\n",
+    "stderr": ""
+  },
+  {
+    "index": 10,
+    "start_line": 1417,
+    "end_line": 1420,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 11,
+    "start_line": 1438,
+    "end_line": 1442,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 12,
+    "start_line": 1459,
+    "end_line": 1463,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 13,
+    "start_line": 1480,
+    "end_line": 1483,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 14,
+    "start_line": 1499,
+    "end_line": 1502,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 15,
+    "start_line": 1518,
+    "end_line": 1521,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 16,
+    "start_line": 1545,
+    "end_line": 1550,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 17,
+    "start_line": 1567,
+    "end_line": 1574,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 18,
+    "start_line": 1593,
+    "end_line": 1597,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 19,
+    "start_line": 1613,
+    "end_line": 1617,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 20,
+    "start_line": 1633,
+    "end_line": 1638,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 21,
+    "start_line": 1663,
+    "end_line": 1667,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 22,
+    "start_line": 1684,
+    "end_line": 1688,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 23,
+    "start_line": 1707,
+    "end_line": 1711,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 24,
+    "start_line": 1728,
+    "end_line": 1732,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 25,
+    "start_line": 1749,
+    "end_line": 1753,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 26,
+    "start_line": 1772,
+    "end_line": 1776,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 27,
+    "start_line": 1795,
+    "end_line": 1799,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 28,
+    "start_line": 1816,
+    "end_line": 1820,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 29,
+    "start_line": 1837,
+    "end_line": 1841,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 30,
+    "start_line": 1858,
+    "end_line": 1862,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 31,
+    "start_line": 1885,
+    "end_line": 1889,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 32,
+    "start_line": 1906,
+    "end_line": 1912,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 33,
+    "start_line": 1931,
+    "end_line": 1936,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 34,
+    "start_line": 1954,
+    "end_line": 1959,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 35,
+    "start_line": 1977,
+    "end_line": 1982,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 36,
+    "start_line": 2000,
+    "end_line": 2006,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 37,
+    "start_line": 2024,
+    "end_line": 2027,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 38,
+    "start_line": 2049,
+    "end_line": 2052,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 39,
+    "start_line": 2068,
+    "end_line": 2072,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 40,
+    "start_line": 2088,
+    "end_line": 2094,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 41,
+    "start_line": 2113,
+    "end_line": 2118,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 42,
+    "start_line": 2136,
+    "end_line": 2141,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 43,
+    "start_line": 2159,
+    "end_line": 2163,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 44,
+    "start_line": 2182,
+    "end_line": 2186,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 45,
+    "start_line": 2209,
+    "end_line": 2213,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 46,
+    "start_line": 2230,
+    "end_line": 2234,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 47,
+    "start_line": 2251,
+    "end_line": 2255,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 48,
+    "start_line": 2272,
+    "end_line": 2277,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 49,
+    "start_line": 2295,
+    "end_line": 2298,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 50,
+    "start_line": 2314,
+    "end_line": 2317,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 51,
+    "start_line": 2333,
+    "end_line": 2336,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 52,
+    "start_line": 2352,
+    "end_line": 2355,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 53,
+    "start_line": 2371,
+    "end_line": 2374,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 54,
+    "start_line": 2390,
+    "end_line": 2393,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 55,
+    "start_line": 2409,
+    "end_line": 2412,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 56,
+    "start_line": 2428,
+    "end_line": 2431,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 57,
+    "start_line": 2447,
+    "end_line": 2450,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 58,
+    "start_line": 2472,
+    "end_line": 2478,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 59,
+    "start_line": 2497,
+    "end_line": 2502,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 60,
+    "start_line": 2520,
+    "end_line": 2525,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 61,
+    "start_line": 2543,
+    "end_line": 2548,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 62,
+    "start_line": 2566,
+    "end_line": 2571,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 63,
+    "start_line": 2589,
+    "end_line": 2593,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 64,
+    "start_line": 2611,
+    "end_line": 2614,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 65,
+    "start_line": 2631,
+    "end_line": 2634,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 66,
+    "start_line": 2650,
+    "end_line": 2653,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 67,
+    "start_line": 2675,
+    "end_line": 2679,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 68,
+    "start_line": 2696,
+    "end_line": 2700,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 69,
+    "start_line": 2717,
+    "end_line": 2721,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 70,
+    "start_line": 2738,
+    "end_line": 2742,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 71,
+    "start_line": 2779,
+    "end_line": 2783,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 72,
+    "start_line": 2802,
+    "end_line": 2806,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 73,
+    "start_line": 2823,
+    "end_line": 2827,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 74,
+    "start_line": 2846,
+    "end_line": 2850,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 75,
+    "start_line": 2868,
+    "end_line": 2920,
+    "returncode": 0,
+    "stdout": "chosen_bs 4\nmax_seq_len 12\ntotal_extend_tokens 6\nseq_lens_list [5, 12, 7]\nactive {'req0': {'slot': 0, 'seq_len': 5}}\nallocated_block 1\nremaining_blocks [2, 3]\nprefix_hits {'sys': 2, 'chat': 1}\nslots_by_adapter {'base': [0]}\npinned True\nreq_pool_dev [7, 8, 9, 0]\nresponse {\"chosen_bs\": 4, \"max_seq_len\": 12, \"token\": 42}\n",
+    "stderr": ""
+  },
+  {
+    "index": 76,
+    "start_line": 2964,
+    "end_line": 2968,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "index": 77,
+    "start_line": 2983,
+    "end_line": 3030,
+    "returncode": 0,
+    "stdout": "stream_event_c [1.0, 3.0, 5.0, 7.0]\ngraph_out [[14.0, 14.0], [14.0, 14.0]]\nscalar_item 14.0\nsmall_list [14.0, 14.0, 14.0, 14.0]\ncpu_copy_device cpu\n",
+    "stderr": ""
+  },
+  {
+    "index": 78,
+    "start_line": 3059,
+    "end_line": 3074,
+    "returncode": 0,
+    "stdout": "mask shape=(2, 3), dtype=bool, device=musa:0, value=[[True, False, True], [False, False, True]]\nidx shape=(3, 2), dtype=int64, device=musa:0, value=[[0, 0], [0, 2], [1, 2]]\nrows shape=(3,), dtype=int64, device=musa:0, value=[0, 0, 1]\ncols shape=(3,), dtype=int64, device=musa:0, value=[0, 2, 2]\n",
+    "stderr": ""
+  },
+  {
+    "index": 79,
+    "start_line": 3095,
+    "end_line": 3109,
+    "returncode": 0,
+    "stdout": "x shape=(6,), dtype=int64, device=musa:0, value=[3, 1, 3, 2, 1, 4]\nvalues shape=(4,), dtype=int64, device=musa:0, value=[1, 2, 3, 4]\ninverse shape=(6,), dtype=int64, device=musa:0, value=[2, 0, 2, 1, 0, 3]\ncounts shape=(4,), dtype=int64, device=musa:0, value=[2, 1, 2, 1]\n",
+    "stderr": ""
+  },
+  {
+    "index": 80,
+    "start_line": 3130,
+    "end_line": 3145,
+    "returncode": 0,
+    "stdout": "mask shape=(2, 3), dtype=bool, device=musa:0, value=[[False, True, False], [True, False, True]]\nselected shape=(3,), dtype=float32, device=musa:0, value=[2.0, 3.0, 4.0]\nfixed shape=(2, 3), dtype=float32, device=musa:0, value=[[0.0, 2.0, 0.0], [3.0, 0.0, 4.0]]\n",
+    "stderr": ""
+  },
+  {
+    "index": 81,
+    "start_line": 3225,
+    "end_line": 3245,
+    "returncode": 0,
+    "stdout": "",
+    "stderr": ""
+  }
+]

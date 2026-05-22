@@ -1,0 +1,1 @@
+-rwxr-xr-x 1 root root 789K May 22 07:15 /tmp/mupti_api_profiler/libmusa_mupti_activity_profiler.so

@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git -C /home/mtuser/workspace/Insights log --oneline -5)"
+    ]
+  }
+}

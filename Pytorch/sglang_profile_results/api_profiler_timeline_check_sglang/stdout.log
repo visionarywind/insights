@@ -1,0 +1,23 @@
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+max_total_num_tokens=368133
+Warmup ...
+Prefill. latency: 9.02558 s, throughput:      1.77 token/s
+Decode 0. Batch size: 1, latency: 0.83944 s, throughput:      1.19 token/s
+Decode 1. Batch size: 1, latency: 0.03108 s, throughput:     32.18 token/s
+Decode 2. Batch size: 1, latency: 0.03052 s, throughput:     32.76 token/s
+Decode 3. Batch size: 1, latency: 0.03052 s, throughput:     32.76 token/s
+Decode 4. Batch size: 1, latency: 0.03047 s, throughput:     32.82 token/s
+Decode.  median latency: 0.03052 s, median throughput:     32.76 token/s
+Total. latency: 10.049 s, throughput:      2.39 token/s
+Benchmark ...
+Prefill. latency: 0.03448 s, throughput:    464.01 token/s
+Decode 0. Batch size: 1, latency: 0.03043 s, throughput:     32.86 token/s
+Decode 1. Batch size: 1, latency: 0.03033 s, throughput:     32.97 token/s
+Decode 2. Batch size: 1, latency: 0.03019 s, throughput:     33.12 token/s
+Decode 3. Batch size: 1, latency: 0.03061 s, throughput:     32.67 token/s
+Decode 4. Batch size: 1, latency: 0.03046 s, throughput:     32.83 token/s
+Decode.  median latency: 0.03033 s, median throughput:     32.97 token/s
+Total. latency:  0.247 s, throughput:     97.17 token/s

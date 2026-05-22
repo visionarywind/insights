@@ -1,0 +1,10 @@
+==== MUPTI Activity Profile Summary ====
+
+API latency by muXXX/musaXXX name
+name                                                                                            calls     total_ms       avg_us       max_us
+
+Kernel launch API latency by kernel/operator symbol
+name                                                                                            calls     total_ms       avg_us       max_us
+
+Kernel/device time by kernel symbol
+name                                                                                            calls     total_ms       avg_us       max_us

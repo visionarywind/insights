@@ -1,0 +1,141 @@
+RUN_DIR=/tmp/compare_api_activity_us_rerun_01
+[env] checking torch/torch_musa and profiler
+torch 2.9.0
+torch_musa 2.9.0+0680da1
+device_count 1
+device0_mem_gib 79.31 79.91
+-rwxr-xr-x 1 root root 418K May 22 03:14 /tmp/mupti_api_profiler/libmusa_mupti_activity_profiler.so
+[run] starting sglang with MUPTI activity profiler
+EXIT=0
+ELAPSED_SECONDS=43
+--- stdout tail ---
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+[Gloo] Rank 0 is connected to 0 peer ranks. Expected number of connected peer ranks is : 0
+max_total_num_tokens=368133
+Warmup ...
+Prefill. latency: 8.71195 s, throughput:      1.84 token/s
+Decode 0. Batch size: 1, latency: 0.81734 s, throughput:      1.22 token/s
+Decode 1. Batch size: 1, latency: 0.03151 s, throughput:     31.73 token/s
+Decode 2. Batch size: 1, latency: 0.03129 s, throughput:     31.95 token/s
+Decode 3. Batch size: 1, latency: 0.03118 s, throughput:     32.07 token/s
+Decode 4. Batch size: 1, latency: 0.03116 s, throughput:     32.10 token/s
+Decode.  median latency: 0.03118 s, median throughput:     32.07 token/s
+Total. latency:  9.716 s, throughput:      2.47 token/s
+Benchmark ...
+Prefill. latency: 0.03433 s, throughput:    466.00 token/s
+Decode 0. Batch size: 1, latency: 0.03073 s, throughput:     32.54 token/s
+Decode 1. Batch size: 1, latency: 0.03048 s, throughput:     32.80 token/s
+Decode 2. Batch size: 1, latency: 0.03060 s, throughput:     32.68 token/s
+Decode 3. Batch size: 1, latency: 0.03089 s, throughput:     32.37 token/s
+Decode 4. Batch size: 1, latency: 0.03039 s, throughput:     32.91 token/s
+Decode.  median latency: 0.03060 s, median throughput:     32.68 token/s
+Total. latency:  0.248 s, throughput:     96.61 token/s
+--- stderr key lines ---
+[2026-05-22 06:26:16 TP0] Load weight begin. avail mem=79.31 GB
+[2026-05-22 06:26:36 TP0] Load weight end. type=Qwen3ForCausalLM, dtype=torch.float16, avail mem=63.58 GB, mem usage=15.73 GB.
+[2026-05-22 06:26:36 TP0] KV Cache is allocated. #tokens: 368133, K size: 25.28 GB, V size: 25.28 GB
+[2026-05-22 06:26:36 TP0] Memory pool end. avail mem=12.29 GB
+--- activity profile head ---
+==== MUPTI Activity Profile Summary ====
+
+API latency by muXXX/musaXXX name
+name                                                                                            calls     total_ms       avg_us       max_us
+musaLaunchKernel_v7000                                                                           4674     7633.483     1633.180  2379837.587
+musaMemcpyAsync_v3020                                                                             430     1085.954     2525.474    64975.295
+muMemSetAccess                                                                                    224      417.727     1864.851     6976.242
+musaStreamCreateWithPriority_v5050                                                                 96      118.159     1230.821     2329.670
+musaLaunchKernelExC_v11060                                                                       2321      101.415       43.695    47893.158
+muMemCreate                                                                                      3405       23.059        6.772      312.106
+musaDeviceSynchronize_v3020                                                                        37       12.876      347.993      852.742
+muLaunchKernel                                                                                   2280        9.434        4.138       39.081
+musaGetDevice_v3020                                                                             95682        7.524        0.079        7.475
+muPointerGetAttribute                                                                           11892        4.138        0.348        9.345
+muModuleGetFunction                                                                                13        2.246      172.799      215.400
+muDevicePrimaryCtxGetState                                                                      32899        2.072        0.063        7.228
+muMemMap                                                                                         3405        1.327        0.390        7.149
+muModuleLoadData                                                                                   13        1.179       90.655      132.481
+musaStreamSynchronize_v3020                                                                       414        0.700        1.692      242.985
+muTensorDescriptorEncode                                                                         6963        0.642        0.092        4.038
+musaHostAlloc_v3020                                                                                 1        0.579      578.749      578.749
+musaGetLastError_v3020                                                                           6317        0.454        0.072        3.942
+muCtxGetCurrent                                                                                  2293        0.113        0.049        2.308
+musaMemGetInfo_v3020                                                                                9        0.097       10.818       36.978
+muDeviceGetAttribute                                                                              111        0.029        0.262        2.976
+musaGetDeviceProperties_v2_v12000                                                                  12        0.028        2.301       16.343
+muMemAddressReserve                                                                                 2        0.017        8.676       13.994
+musaDeviceCanAccessPeer_v4000                                                                      14        0.007        0.535        0.669
+muFuncGetAttribute                                                                                 26        0.006        0.226        0.836
+musaGetDeviceCount_v3020                                                                            4        0.004        0.982        2.897
+muDeviceGet                                                                                        14        0.004        0.276        0.593
+muGetExportTable                                                                                    2        0.002        0.911        1.749
+musaDeviceGetStreamPriorityRange_v5050                                                              1        0.001        0.924        0.924
+muInit                                                                                              1        0.000        0.334        0.334
+
+Kernel launch API latency by kernel/operator symbol
+name                                                                                            calls     total_ms       avg_us       max_us
+
+Kernel/device time by kernel symbol
+name                                                                                            calls     total_ms       avg_us       max_us
+musa_asm_hhhhssgemm_nt_tce_128_32x128B128_epilogue_stage3_btmenc                                  592       93.686      158.254      836.428
+musa_asm_hhhhssgemm_nt_tce_256_32x128B128_epilogue_stage3_btmenc                                 1728       83.429       48.281       77.922
+_ZN4musa3dnn12_GLOBAL__N_110KernelFillI6__halfLb0ELb0ELb0ELNS1_13BroadcastModeE0ENS0_12D          219       40.939      186.936      588.180
+_fwd_grouped_kernel_stage1                                                                        504       10.924       21.674       30.201
+_Z25LayerNormGlobalKernelVlenI6__halffLi1024ELi1ELi8EEvPT_S2_PKS1_mmT0_                          1152        8.167        7.089        9.721
+_ZN4musa3dnn25LayerNormGlobalKernelVlenI6__halffS2_fLi64ELi1ELi8ELNS0_8NormTypeE1ELb0EEE         1080        6.153        5.697        7.360
+_ZN2at6native12_GLOBAL__N_121IndexVectorizedKernelIZNS1_14GPUIndexKernelIN3c104HalfELi1E         1008        5.683        5.638        6.361
+triton_poi_fused_add_cat_index_select_mul_split_sub_unsqueeze_view_0                              576        4.367        7.581       12.560
+triton_poi_fused_add_cat_index_select_mul_split_sub_unsqueeze_view_1                              576        3.967        6.886       10.801
+_ZN4musa3dnn12_GLOBAL__N_112KernelSwiGluI6__halfNS0_13FastDivmodU32EEEvPT_PKS5_llT0_              576        3.332        5.784        7.880
+_fwd_kernel_stage2                                                                                504        2.378        4.718        5.041
+_fwd_kernel                                                                                        72        1.202       16.692       21.320
+_ZN4musa3dnn12_GLOBAL__N_124CopyLastContiguousKernelILi8EsLb1ENS0_12DeviceTensorIjNS0_13          216        0.975        4.515        5.440
+_ZN2at6native12_GLOBAL__N_121IndexVectorizedKernelIZNS1_14GPUIndexKernelIN3c104HalfELi2E          144        0.833        5.781        7.360
+_ZN4musa3dnn12_GLOBAL__N_125ReduceIndicesColumnKernelIffiflNS0_17ReduceIndicesTypeIfiEEN           16        0.531       33.216       36.201
+_ZN4musa3dnn12_GLOBAL__N_110KernelFillIiLb0ELb0ELb0ELNS1_13BroadcastModeE0ENS0_12DeviceT            3        0.492      164.005      486.576
+_ZN4musa3dnn25LayerNormGlobalKernelVlenI6__halffS2_fLi64ELi8ELi8ELNS0_8NormTypeE1ELb0EEE           72        0.420        5.827        7.000
+get_num_kv_splits_triton                                                                           14        0.183       13.072       17.240
+_ZN4musa3dnn25LayerNormGlobalKernelVlenI6__halffS2_fLi128ELi4ELi8ELNS0_8NormTypeE1ELb0EE           16        0.136        8.488       11.201
+_ZN4musa3dnn5unary12kernel_unaryIlNS1_6CastOpElilLi128EEEvPT2_PKT_mT1_S9_PKvSB_NS0_9Para           32        0.130        4.053        4.520
+_ZN2at6native12_GLOBAL__N_122IndexElementwiseKernelIZNS1_14GPUIndexKernelIiLi1ELb1ELi2EL           14        0.081        5.757        5.880
+_ZN4musa3dnn21ScanPartSumShflKernelIlllNS0_6ScanOpINS0_12DeviceTensorIjNS0_13FastDivmodU           14        0.071        5.077        5.920
+create_flashinfer_kv_indices_triton                                                                16        0.064        4.028        5.240
+_ZN2at6native12_GLOBAL__N_123IndexSelectVectorKernelI6__halflLb1ELi128EEEvPT_PT0_S5_llll           16        0.064        4.013        4.281
+_ZN4musa3dnn5unary12kernel_unaryI6__halfNS1_6CastOpEffS3_Li128EEEvPT2_PKT_mT1_SA_PKvSC_N           16        0.059        3.708        4.680
+_ZN4musa3dnn5unary12kernel_unaryIiNS1_5AddOpEiiiLi128EEEvPT2_PKT_mT1_S9_PKvSB_NS0_9Param           14        0.059        4.186        4.360
+_ZN4musa3dnn6binary19kernel_binary_vlen1IfNS1_5MulOpEfNS0_12DeviceTensorIjNS0_13FastDivm            2        0.058       28.840       47.801
+_ZN4musa3dnn5unary12kernel_unaryIlNS1_5AddOpElllLi128EEEvPT2_PKT_mT1_S9_PKvSB_NS0_9Param           14        0.048        3.397        4.200
+_ZN4musa3dnn12_GLOBAL__N_124KernelConcatLastSmallDimIiLi2ELi4ELb0ENS0_13FastDivmodU32ELi            2        0.047       23.620       32.761
+_ZN4musa3dnn5unary12kernel_unaryIlNS1_10IdentityOpElllLi128EEEvPT2_PKT_mT1_S9_PKvSB_NS0_           14        0.041        2.952        3.800
+_ZN4musa3dnn21ScanPartSumShflKernelIillNS0_6ScanOpINS0_12DeviceTensorIjNS0_13FastDivmodU            6        0.032        5.274        6.001
+_ZN4musa3dnn12_GLOBAL__N_114KernelConcatNyIsLi2ELi8ELb0ENS0_13FastDivmodU32ELb1EEEvPT_NS            1        0.026       26.000       26.000
+_ZN4musa3dnn5unary12kernel_unaryIfNS1_6CastOpEf6__halffLi128EEEvPT2_PKT_mT1_SA_PKvSC_NS0            2        0.024       12.220       19.480
+_ZN4musa3dnn5unary12kernel_unaryIfNS1_5CosOpEfffLi128EEEvPT2_PKT_mT1_S9_PKvSB_NS0_9Param            2        0.023       11.260       16.760
+_ZN4musa3dnn5unary12kernel_unaryIfNS1_5SinOpEfffLi128EEEvPT2_PKT_mT1_S9_PKvSB_NS0_9Param            2        0.022       11.240       18.000
+triton_poi_fused_clamp_sub_0                                                                       14        0.022        1.586        1.880
+_ZN4musa3dnn6binary13kernel_binaryIfNS1_5PowOpEfffLi128EEEvPT3_PKT_PKT2_lT1_SC_PKvSE_NS0            1        0.019       18.841       18.841
+_ZN4musa3dnn5unary12kernel_unaryIlNS1_5SubOpElllLi128EEEvPT2_PKT_mT1_S9_PKvSB_NS0_9Param            4        0.014        3.541        4.320
+_ZN2at6native12_GLOBAL__N_113arange_kernelIlEEvPT_S3_S3_i                                           3        0.013        4.440        5.520
+musa_asm_hhhhssgemm_nn_tce_128_64x64B128_epilogue_stage4_btmenc                                     1        0.012       12.120       12.120
+write_req_to_token_pool_triton                                                                      2        0.011        5.440        6.400
+_ZN2at6native12_GLOBAL__N_121IndexVectorizedKernelIZNS1_14GPUIndexKernelIN3c104HalfELi1E            2        0.011        5.360        5.880
+_ZN4musa3dnn12_GLOBAL__N_124KernelConcatLastSmallDimIlLi2ELi2ELb0ENS0_13FastDivmodU32ELi            1        0.010       10.080       10.080
+compute_position_kernel                                                                             2        0.007        3.380        3.680
+_ZN2at6native12_GLOBAL__N_113arange_kernelIfEEvPT_S3_S3_i                                           3        0.006        2.080        2.440
+_ZN4musa3dnn12_GLOBAL__N_110KernelFillIlLb0ELb0ELb0ELNS1_13BroadcastModeE0ENS0_12DeviceT            2        0.006        3.060        3.120
+_ZN4musa3dnn5unary12kernel_unaryIfNS1_5PowOpEffdLi128EEEvPT2_PKT_mT1_S9_PKvSB_NS0_9Param            1        0.006        5.680        5.680
+_ZN4musa3dnn5unary12kernel_unaryIlNS1_6CastOpElflLi128EEEvPT2_PKT_mT1_S9_PKvSB_NS0_9Para            1        0.006        5.680        5.680
+_ZN4musa3dnn5unary12kernel_unaryIfNS1_10IdentityOpEfffLi128EEEvPT2_PKT_mT1_S9_PKvSB_NS0_            1        0.004        3.560        3.560
+_ZN4musa3dnn5unary12kernel_unaryIfNS1_9TrueDivOpEfffLi128EEEvPT2_PKT_mT1_S9_PKvSB_NS0_9P            1        0.004        3.560        3.560
+_ZN4musa3dnn12_GLOBAL__N_110KernelFillIfLb0ELb0ELb0ELNS1_13BroadcastModeE0ENS0_12DeviceT            1        0.002        2.280        2.280
+--- files ---
+/tmp/compare_api_activity_us_rerun_01/command.txt 194 bytes
+/tmp/compare_api_activity_us_rerun_01/elapsed_seconds.txt 3 bytes
+/tmp/compare_api_activity_us_rerun_01/env_check.log 80 bytes
+/tmp/compare_api_activity_us_rerun_01/exit_code.txt 2 bytes
+/tmp/compare_api_activity_us_rerun_01/gpu_activity_profile.txt 589 bytes
+/tmp/compare_api_activity_us_rerun_01/profiler_so.txt 100 bytes
+/tmp/compare_api_activity_us_rerun_01/run_config.txt 403 bytes
+/tmp/compare_api_activity_us_rerun_01/stderr.log 2090 bytes
+/tmp/compare_api_activity_us_rerun_01/stdout.log 1543 bytes

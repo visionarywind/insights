@@ -1,0 +1,12 @@
+RUN_DIR=/tmp/sglang_api_timeline_check_01
+GPU_ID=1
+MODEL_PATH=/data/shanfeng/models/Qwen/Qwen3-8B
+BATCH=1
+INPUT_LEN=16
+OUTPUT_LEN=8
+DISABLE_CUDA_GRAPH=1
+SGLANG_DIR=/sgl-workspace/sglang
+MUSA_HOME=/workspace/scripts/musa_toolkits_5.1.0
+PROFILER_SO=/tmp/mupti_api_profiler/libmusa_mupti_activity_profiler.so
+MUPTI_ACTIVITY_PROFILE_OUTPUT=/tmp/sglang_api_timeline_check_01/gpu_activity_profile.txt
+MUPTI_ACTIVITY_TIMELINE_OUTPUT=/tmp/sglang_api_timeline_check_01/gpu_activity_timeline.tsv

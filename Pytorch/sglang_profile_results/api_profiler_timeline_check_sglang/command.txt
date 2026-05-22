@@ -1,0 +1,1 @@
+python -m sglang.bench_one_batch --model-path /data/shanfeng/models/Qwen/Qwen3-8B --batch 1 --input-len 16 --output-len 8 --dtype float16 --trust-remote-code --device musa --disable-cuda-graph 

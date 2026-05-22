@@ -1,0 +1,23 @@
+WARNING:vllm._custom_ops:Failed to import from vllm._C with ModuleNotFoundError("No module named 'vllm._C'")
+/sgl-workspace/sglang/python/sglang/srt/layers/quantization/awq.py:82: UserWarning: MUSA does not support fused_marlin_moe currently.
+  warnings.warn(f"MUSA does not support fused_marlin_moe currently.")
+WARNING:sglang.srt.configs.model_config:Casting torch.bfloat16 to torch.float16.
+WARNING:sglang.srt.server_args:Attention backend not explicitly specified. Use triton backend by default.
+[2026-05-22 07:26:10 TP0] Casting torch.bfloat16 to torch.float16.
+[2026-05-22 07:26:10 TP0] Init torch distributed begin.
+[2026-05-22 07:26:10 TP0] Init torch distributed ends. mem usage=0.00 GB
+[2026-05-22 07:26:11 TP0] Ignore import error when loading sglang.srt.models.mindspore: name 'ms' is not defined
+[2026-05-22 07:26:11 TP0] Load weight begin. avail mem=79.31 GB
+Loading safetensors checkpoint shards:   0% Completed | 0/5 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:  20% Completed | 1/5 [00:03<00:13,  3.43s/it]
+Loading safetensors checkpoint shards:  40% Completed | 2/5 [00:06<00:10,  3.47s/it]
+Loading safetensors checkpoint shards:  60% Completed | 3/5 [00:09<00:06,  3.16s/it]
+Loading safetensors checkpoint shards:  80% Completed | 4/5 [00:10<00:02,  2.35s/it]
+Loading safetensors checkpoint shards: 100% Completed | 5/5 [00:14<00:00,  2.73s/it]
+Loading safetensors checkpoint shards: 100% Completed | 5/5 [00:14<00:00,  2.85s/it]
+
+[2026-05-22 07:26:31 TP0] Load weight end. type=Qwen3ForCausalLM, dtype=torch.float16, avail mem=63.58 GB, mem usage=15.73 GB.
+[2026-05-22 07:26:31 TP0] Using KV cache dtype: torch.float16
+[2026-05-22 07:26:31 TP0] KV Cache is allocated. #tokens: 368133, K size: 25.28 GB, V size: 25.28 GB
+[2026-05-22 07:26:31 TP0] Memory pool end. avail mem=12.29 GB
+[rank0]:[W522 07:26:42.949158474 ProcessGroupMCCL.cpp:1095] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())
