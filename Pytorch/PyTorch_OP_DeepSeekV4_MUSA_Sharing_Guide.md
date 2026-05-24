@@ -1,286 +1,406 @@
-# PyTorch 常见 OP 用法、性能问题与 LLM 结构实践
+# PyTorch 常见 OP 分享：分类、性能与 DeepSeek V4 实践
 
-## 摘要
+## 文章提纲
 
-常见 PyTorch OP 在 LLM 推理和训练中承担不同工程角色：有的组织 layout，有的表达数学语义，有的更新 metadata，有的触发同步边界，有的服务 Graph replay。分析路径先按 GPU OP、CPU OP、Sync OP、Dynamic Shape OP 和 Graph OP 分类，说明功能、用法、注意事项和性能问题；再用 Embedding、Attention、RMSNorm/MLP、MoE、Logits/Sampling、Metadata/Graph 这些经典结构解释 OP 如何组合；最后用 DeepSeek V4/Pro 的核心模块和 MUSA 最小用例做验证。
+分享内容围绕 PyTorch 常见 OP 展开，主线是“OP 是什么、在 Transformer 里怎么组织、放到 DeepSeek V4-Pro 源码里如何出现、在 MUSA 上如何用最小例子验证”。阅读顺序如下：
 
-## 内容概览
+1. **PyTorch 常见 OP 分类**：先把 OP 分成 GPU OP、CPU OP、Sync OP、Dynamic Shape OP 和 Graph OP，说明每类包含哪些常见 API。
+2. **注意事项和性能问题**：围绕 layout、分配、未融合 OP 链、CPU-DEVICE 同步、dynamic shape、dtype/量化和 Graph 约束说明常见风险。
+3. **Transformer 架构中的 OP 组织**：从 token embedding 到 attention、KV cache、RMSNorm/MLP、logits/sampling，看 OP 如何串成完整 forward。
+4. **DeepSeek V4-Pro 源码分析**：按 Linear、Attention、MoE、HC/MHC 和权重转换模块分析源码中用到的 OP，以及这些 OP 的组织方式。
+5. **MUSA 最小用例与结果**：把前面出现的模块抽成可运行用例，展示输入、代码和 MUSA 执行输出。
+6. **回顾总结**：沉淀一套看 PyTorch OP 的方法：功能语义、输入输出、内存行为、同步边界、Graph 约束和执行路径一起看。
 
-整体按“OP 分类 → LLM 经典结构 → 性能问题 → DeepSeek V4/Pro 核心模块 → MUSA 最小用例 → 附录源码与逐 OP 用例”的顺序展开。主线围绕 PyTorch OP 的功能、用法、注意事项和性能风险，源码只保留核心模块映射，详细片段放到附录。
+附录 A 保留 PyTorch 常见 OP 的详细用例和 MUSA 输出；附录 B 保留 DeepSeek V4-Pro 源码分析；附录 C 保留 DeepSeek V4 在 SGLang 中的源码分析。
 
-第 1 章介绍常见 PyTorch OP 的分类、场景、用法和注意事项，包括 GPU OP、CPU OP、Sync OP、Dynamic Shape OP 和 Graph OP。
+## 1. PyTorch 常见 OP 如何分类
 
-第 2 章按 LLM 经典结构组织 OP：Embedding/Position、Attention/KV cache、RMSNorm/MLP/SwiGLU、MoE、Logits/Sampling、Metadata/Graph。
-
-第 3 章集中说明常见性能问题：layout 隐式 copy、频繁分配、未融合 OP 链、CPU-DEVICE 同步、dynamic shape、Graph break、dtype/量化 fallback。
-
-第 4 章用 DeepSeek V4/Pro 核心模块做映射：FP8/FP4 Linear、Compressed Attention、MoE、HC/MHC、metadata 和 Graph runner。
-
-第 5 章保留 MUSA 上的最小可运行用例与输出，用来验证关键 OP 行为；第 6 章汇总注意事项；第 7 章收束到实践建议。附录 A 保留逐 OP 的完整用例和 MUSA 输出；附录 B 保留核心源码摘录和注释。
-
-## 术语约定
-
-下面这些术语用于描述 SGLang DeepSeek V4 推理链路中的执行设备、数据边界和后端行为。
-
-| 术语 | 定义 | 关注点 |
-|------|------|------------|
-| CPU侧 | 运行在 Host 上的 Python/C++ 调度与状态管理逻辑，包括 scheduler、request queue、tokenizer、metadata 构造、日志和协议处理 | 处理动态决策、请求状态和 metadata 准备；避免在 decode 单步执行路径中等待大块 GPU tensor 回读 |
-| DEVICE侧 | 运行在加速设备上的 tensor 计算、显存访问、kernel launch、Graph replay 和通信相关执行 | 执行 attention、MoE、HC/MHC、KV cache、logits 和 sampling 等高频张量计算 |
-| GPU OP | 作用于 GPU tensor 的 PyTorch OP，或用于组织 GPU tensor layout、dtype、shape、buffer 生命周期的 OP | 关注 layout、stride、contiguous、dtype、隐式 copy、kernel 命中和 graph capture 兼容性 |
-| CPU-DEVICE 边界 | Host 与 Device 之间的数据搬运、标量回读或同步边界 | 典型 API 包括 `.item()`、`.tolist()`、`.cpu()`、`to(device)`、`synchronize()`；延迟敏感路径中只保留必要结果回传，例如最终 token、少量 logprob/statistics 或固定 metadata 更新 |
-| CPU侧元数据副本 | CPU scheduler 在 Host 内存中维护的 metadata 副本，例如 `seq_lens_cpu`、batch size、max seq len、bucket 选择状态 | 用于 CPU侧调度和分支判断，避免为了读取标量而从 GPU tensor 回读；需要与 DEVICE侧 metadata 同步更新 |
-| 延迟敏感路径 | 在线推理中高频重复执行、直接影响吞吐和延迟的执行路径 | 主要包括 decode 单步、prefill/decode 切换、graph replay 前准备和 replay 内部 |
-| fallback | 目标后端 kernel 未命中时，退回 PyTorch reference、Composite、CPU 或通用实现的路径 | 可用于语义对齐和调试；进入延迟敏感路径时需要关注性能、同步和 graph 兼容性 |
-| capture/replay | CUDA/MUSA Graph 先捕获固定 shape、固定地址、固定执行序列，再通过 replay 复用这段执行路径 | replay 前的输入更新应写入既有 buffer，避免替换 capture 时绑定的 tensor 对象 |
-| 显式报错/受控回退 | 后端不支持某个 dtype、layout、shape 或执行模式时，显式报错或走受控 fallback | 避免静默退回到语义或性能不一致的实现 |
-
-这些术语会用于描述五类信息：OP 在 CPU侧还是 DEVICE侧执行，是否跨越 CPU-DEVICE 边界，是否位于高频推理路径，是否命中目标执行路径，以及是否满足 Graph capture/replay 约束。
-
-## 1. PyTorch 常见 OP：分类、场景、用法与注意事项
-
-理解常见 OP，可以先看功能、输入输出、使用场景和注意事项，再结合 LLM 结构理解它们为什么这样组合使用。下文把 PyTorch OP 分为五类：GPU OP、CPU OP、Sync OP、Dynamic Shape OP 和 Graph OP。每一类先说明它解决什么问题、怎么用、有哪些注意事项；后面的章节再以 Embedding、Attention、MLP、MoE、Graph replay 和 MUSA 最小用例说明这些 OP 的典型用法。
-
-GPU OP 主要负责 DEVICE侧张量计算和 layout 组织；CPU OP 主要负责请求调度、状态维护和 metadata 准备；Sync OP 负责 stream、device 和 rank 之间的时序；Dynamic Shape OP 的输出形态依赖输入数据内容；Graph OP 用于固定地址、固定 shape 和固定执行序列的 replay。先把这些功能边界讲清楚，后面看 LLM 结构案例时就能直接对应到具体用法和注意事项。
+PyTorch OP 可以按执行位置和工程作用分类。这样分类比单纯背 API 名字更有价值，因为同一个 API 在不同位置的代价完全不同：`view` 可能只是零拷贝改 shape，`reshape` 可能触发真实 copy；`.item()` 可能只是读取 CPU 标量，也可能让 CPU 等待 DEVICE侧计算完成；`copy_` 可能是普通赋值，也可能是 Graph replay 前保持固定地址的关键动作。
 
 ### 1.1 GPU OP
 
-GPU OP 是模型 forward、attention、MoE、sampling、KV cache 和 fallback reference 的基础表达，覆盖 CUDA、MUSA 等后端上的张量计算和内存组织。常见类别包括创建初始化、原地更新、shape/layout、索引映射、拼接填充、数学激活、线性代数、排序路由、dtype/device 转换。
+GPU OP 作用于 DEVICE tensor，覆盖张量创建、layout 整理、索引映射、数学计算、线性代数、路由和 dtype/device 转换。它们是 Transformer forward、KV cache、MoE、sampling 和 Graph replay 的主体。
 
-| 类别           | 常见 OP                                                      | 典型场景                                                         | 如何使用                                                         | 注意事项                                         | 附录位置                            |
-| ------------ | ---------------------------------------------------------- | ------------------------------------------------------------ | ------------------------------------------------------------ | -------------------------------------------- | ------------------------------- |
-| 创建初始化        | `empty/new_empty/empty_like/zeros/ones/full`               | input buffer、KV cache、logits、padding、临时 workspace            | capture 前预分配固定 shape/device/dtype；`empty` 后需要由后续 kernel 完整写入 | 未初始化读、replay 中替换 tensor 对象、频繁分配破坏性能          | [A.1.1](#a11-tensor-创建与初始化)     |
-| 原地更新         | `copy_/fill_/zero_/clamp_/mul_`                            | graph buffer 更新、metadata 写回、padding 清理、激活裁剪                  | replay 前修改既有 tensor 内容，保持对象地址不变                              | capture 中写入非固定对象、padding 槽位残留旧值              | [A.1.2](#a12-原地复制与更新)           |
-| Shape/Layout | `view/reshape/flatten/unsqueeze/expand/permute/contiguous` | attention head layout、RoPE 输入、MoE expert 维度、kernel 输入布局要求 | 优先使用 view 类零拷贝表达 layout；后端要求连续时显式 `contiguous()`             | 隐式 copy、stride 不匹配、zero-stride expand 被写入    | [A.1.3](#a13-形状布局与广播)           |
-| 索引映射         | `gather/scatter/index_select/masked_fill/where`            | token 路由、KV page 写入、mask、sampling 过滤                         | 索引 dtype 和 device 要与 kernel 输入要求一致；写路径要覆盖预期范围                   | index 越界、重复写冲突、mask shape 广播错误               | [A.1.4](#a14-索引切分与映射)           |
-| 序列组合         | `cat/stack/split/chunk/pad`                                | batch 拼接、MoE gate/up 拆分、bucket padding                       | 延迟敏感路径尽量固定输出 shape；padding 到 capture bucket                     | 动态输出会触发 allocator，并破坏 graph replay 的固定 shape/地址假设 | [A.1.5](#a15-序列拼接填充与条件选择)       |
-| 数学激活         | `sum/mean/rsqrt/silu/softmax/log_softmax/sigmoid`          | RMSNorm、SwiGLU、sampling、fallback reference                   | 简化输入用于验证 fused kernel 语义，大规模延迟敏感路径优先融合                           | 多个未融合的逐元素/归约 OP 会带来多次 kernel launch 和 HBM 读写 | [A.1.6](#a16-数学归约与激活)           |
-| 线性代数/路由      | `matmul/F.linear/topk/sort/argmax`                         | GEMM、LM head、MoE top-k、sampling                              | 关注 dtype、layout、workspace 和 kernel 路径                | fallback、排序稳定性、top-k 输出 shape 与后续 buffer 不一致 | [A.1.7](#a17-线性代数排序与路由)         |
-| dtype/device | `to/float/half/int/long`                                   | metadata dtype、FP16/BF16/FP8 路径、CPU/MUSA 转换                  | dtype 转换放在边界处集中处理；metadata 常用 `int32`                        | 隐式 H2D/D2H、额外 cast、后端不支持当前 dtype             | [A.1.8](#a18-dtype-与-device-转换) |
-
-分析 GPU OP 时，需要把功能语义和执行开销分开看。`view/empty/arange` 通常只是组织数据，未必是瓶颈；更容易出问题的是隐式 copy、频繁分配、未融合的逐元素/归约 OP 序列、layout 转换和 fallback。后面结合 SGLang DeepSeek V4 的 `copy_`、`contiguous`、`pad`、`SwishGLU` 代码时，会分别说明这些 OP 的输入输出、使用原因和性能注意事项。
+| 类别 | 常见 OP | 主要用途 | 关键注意事项 |
+|------|---------|----------|--------------|
+| 创建初始化 | `empty`、`new_empty`、`empty_like`、`zeros`、`ones`、`full` | 创建 input buffer、KV cache、logits、workspace | `empty` 不初始化；Graph replay 中不要替换 capture 过的 tensor 对象 |
+| 原地更新 | `copy_`、`_foreach_copy_`、`fill_`、`zero_`、`clamp_`、`masked_fill_` | 更新 metadata、清理 padding、写 graph buffer、裁剪激活 | 原地 OP 会覆盖输入；padding 槽位必须清理 |
+| Shape/Layout | `view`、`reshape`、`flatten`、`unsqueeze`、`squeeze`、`expand`、`permute`、`transpose`、`contiguous` | QKV head layout、RoPE 输入、MoE expert 维度、kernel 输入布局 | `view` 要求 stride 兼容；`contiguous` 可能真实 copy；`expand` 不适合原地写 |
+| 索引映射 | slice、advanced indexing、`gather`、`take_along_dim`、`index_select`、`scatter_` | KV page/slot、MoE dispatch/combine、sampling mask | index dtype/device 要匹配；重复写、越界和 mask 广播最容易出错 |
+| 序列组合 | `arange`、`repeat_interleave`、`cat`、`stack`、`split`、`chunk`、`pad`、`where` | positions 展开、batch 拼接、gate/up 切分、bucket padding | 动态输出会影响 allocator、compile 和 Graph replay |
+| 数学与激活 | `sum`、`mean`、`square`、`rsqrt`、`sigmoid`、`silu`、`gelu`、`relu`、`softmax`、`clamp` | RMSNorm、SwiGLU、attention/sampling、reference 实现 | 多个逐元素/归约 OP 串联会带来多次 launch 和 HBM 读写 |
+| 线性代数与路由 | `F.linear`、`matmul`、`mm`、`bmm`、`einsum`、`topk`、`sort`、`argmax` | QKV/O projection、MLP、LM head、MoE top-k、sampling | dtype、layout、scale、top-k shape 和排序稳定性要明确 |
+| dtype/device | `to`、`float`、`half`、`bfloat16`、`int`、`long` | metadata dtype、BF16/FP8/FP4 路径、CPU/DEVICE 边界 | 避免 OP 间反复 cast；`to(device)` 可能引入 H2D/D2H copy |
 
 ### 1.2 CPU OP
 
-CPU OP 主要覆盖请求调度、状态维护、metadata 准备和协议侧处理等 CPU侧工作。它们不直接执行 attention、MoE、KV cache 等 DEVICE侧张量计算，而是为这些计算准备 batch、seq lens、page table、bucket、输出位置等输入描述和调度信息。常见类别包括 Python 容器、CPU tensor metadata、CPU-DEVICE 边界转换、标量读取、序列化和 H2D metadata 上传。
+CPU OP 主要服务调度和状态管理，不直接承担大张量计算。在线推理里，CPU侧负责 request queue、prefix cache、bucket 选择、KV block 管理、metadata 构造和协议输出；DEVICE侧负责 attention、MLP/MoE、logits 和 sampling 的张量计算。
 
-| 类别 | 常见 OP | 典型场景 | 如何使用 | 注意事项 |
-|------|---------|---------|---------|---------|
-| Python/CPU侧 | `list/dict/len/range/sort` | request 队列、block table、prefix cache、bucket 选择 | 在 CPU侧维护调度状态，并把规划结果整理成 DEVICE侧需要的 tensor metadata | Python 控制流进入 decode 单步执行路径会放大调度开销 |
-| CPU metadata | CPU tensor、`torch.tensor(..., device="cpu")` | `seq_lens_cpu`、batch size、max seq len、cache block id | 为需要 CPU侧决策的字段维护 CPU侧元数据副本，并与 GPU metadata tensor 同步更新 | CPU侧元数据副本与 GPU metadata tensor 不一致会导致 replay metadata 错误 |
-| CPU-DEVICE 边界转换 | `.cpu()`、`.numpy()`、`.tolist()` | 日志、调试、低频统计、协议侧输出 | 只在 CPU侧或调试边界使用，避免搬运完整 logits、hidden states 或大块 metadata | GPU tensor 回 CPU 常触发同步和 D2H copy |
-| 标量读取 | `.item()`、`int(tensor)` | loss scalar、单个 token id、CPU侧规划需要的标量结果 | 优先作用在 CPU侧元数据副本；GPU tensor 上的标量只在必要边界读取 | 在 decode 单步中对 GPU tensor 调用 `.item()` 会让 CPU 等待设备侧计算完成，形成 CPU-DEVICE 同步边界 |
-| H2D 上传 | `torch.as_tensor(..., device)`、`to(device)`、pinned memory | CPU scheduler 生成 seq_lens、positions、page table 后上传 | 上传固定 shape metadata，尽量集中处理并复用 buffer | 频繁创建并上传零散 tensor 会增加 launch/拷贝和同步成本 |
-
-分析 CPU OP 时，重点看它是否停留在 CPU侧规划、后处理或调试边界内。推理延迟敏感路径中，CPU侧完成请求规划和 metadata 准备，DEVICE侧执行张量计算，graph replay 读取已经准备好的固定 buffer。
+| 类别 | 常见 OP | 典型场景 | 注意事项 |
+|------|---------|----------|----------|
+| Python 容器 | `list`、`dict`、`len`、`range`、`sort` | scheduler、request state、block table、prefix cache | 可以放在 Graph 外；不要驱动 decode 单步里的 DEVICE tensor 分支 |
+| CPU tensor | `torch.tensor(..., device="cpu")`、CPU-side `max/sum` | `seq_lens_cpu`、batch size、bucket 选择 | CPU侧元数据副本要和 DEVICE侧 metadata 同步 |
+| CPU-DEVICE 转换 | `.cpu()`、`.numpy()`、`.tolist()` | 日志、调试、最终 token、少量统计 | GPU tensor 回 CPU 通常会触发同步和 D2H copy |
+| 标量读取 | `.item()`、`int(tensor)` | loss scalar、最终 token id、CPU侧决策标量 | 对 GPU tensor 高频调用会把异步执行变成 CPU 等待 |
+| H2D metadata | `torch.as_tensor(..., device)`、`to(device)` | seq_lens、positions、page table 上传 | 高频路径要复用固定 buffer，避免零散小 tensor 上传 |
 
 ### 1.3 Sync OP
 
-Sync OP 管理 CPU侧、DEVICE侧 stream、graph replay 和分布式 rank 的时序。常见类别包括全设备同步、局部 stream/event 同步、graph replay 边界、分布式通信同步和隐式同步 API。
+Sync OP 管理 CPU、DEVICE stream、Graph replay 和分布式 rank 的时序。它们本身不一定做数学计算，但会改变执行并行度。
 
-| 类别 | 常见 OP | 典型场景 | 如何使用 | 注意事项 |
-|------|---------|---------|---------|---------|
-| 全设备同步 | `torch.musa.synchronize()`、`torch.cuda.synchronize()` | benchmark 计时、调试、错误定位 | 只放在测量边界或诊断边界，保证前序 DEVICE侧任务完成 | 进入 decode 关键执行路径会打断 CPU侧、DEVICE侧和通信之间的并行执行 |
-| Stream/Event | `current_stream()`、`Stream`、`Event.record()`、`wait_event()` | 多 stream copy/compute 编排、异步 H2D、cache store 与计算并行执行 | 用 event 表达局部依赖，避免全设备等待 | wait 范围过大等价于串行化，capture 中还要关注 API 支持 |
-| Graph 边界 | `graph.replay()` 前后的必要 wait | replay 前更新 fixed buffer，replay 后在读取输出前等待 | replay 内保持固定执行序列，边界处做最小同步 | replay 中出现不支持 capture 的同步或 CPU 依赖会失败 |
-| 分布式通信 | `all_reduce`、`reduce_scatter`、`all_gather`、work wait | 多卡推理、MoE expert 通信、并行 attention/MLP 结果合并 | 尽量使用异步通信并与计算并行执行，只在数据依赖点等待 | 过早 wait 会破坏并行执行，shape 不固定会影响通信 bucket |
-| 隐式同步 | `.item()`、`.tolist()`、`.cpu()`、异常检查 | 最终 token、少量 logprob/statistics、日志、CPU侧分支 | 只在 CPU-DEVICE 边界使用，延迟敏感路径用 CPU侧元数据副本或固定 metadata | 这些 API 不是显式同步函数，但会让 CPU侧等待 DEVICE侧结果 |
-
-同步边界会直接影响推理时序。一个 `.item()`、一次全设备 synchronize，或者一个过早的 stream wait，都可能把本来可以并行执行的 CPU 调度、DEVICE侧计算和通信串行化。
+| 类别 | 常见 API/OP | 合理用法 | 风险 |
+|------|-------------|----------|------|
+| 全设备同步 | `torch.cuda.synchronize()`、`torch.musa.synchronize()` | benchmark、错误定位、程序结束前等待 | 放进 decode 热点路径会打断 CPU/DEVICE 并行 |
+| Stream/Event | `Stream`、`current_stream()`、`Event.record()`、`wait_event()` | copy/compute 编排、异步 H2D、局部依赖 | wait 范围过大等价于串行化 |
+| Graph 边界 | `graph.replay()` 前后必要 wait | replay 前更新固定 buffer，读取输出前等待 | capture 内出现不支持的同步会失败 |
+| 分布式同步 | `all_reduce`、`reduce_scatter`、`all_gather`、work wait | TP/EP/DP 通信、MoE expert 交换 | 过早 wait 会破坏通信与计算重叠 |
+| 隐式同步 | `.item()`、`.tolist()`、`.cpu()` | 最终结果回传、低频统计 | 看起来不是同步 API，但会让 CPU 等 DEVICE |
 
 ### 1.4 Dynamic Shape OP
 
-Dynamic Shape OP 的输出 shape 依赖输入数据值。常见类别包括位置发现、去重统计、mask 压缩、变长拼接和数据依赖索引。它们在 eager 调试和 CPU 规划中很自然，但对 `torch.compile`、CUDA/MUSA Graph、固定 buffer replay 和分布式通信 shape 都不友好。
+Dynamic Shape OP 的输出 shape 依赖输入数据内容。它们非常适合 eager 调试和 CPU 规划，但会增加 compile guard、Graph replay 固定 shape、通信 bucket 和 workspace 复用的复杂度。
 
-| 类别 | 常见 OP | 典型场景 | 如何使用 | 注意事项 |
-|------|---------|---------|---------|---------|
-| 位置发现 | `nonzero`、`argwhere` | 找有效 token、稀疏 mask 调试、CPU侧规划逻辑 | 用于 CPU侧统计或调试；延迟敏感路径用固定 mask/padding 表达有效位 | 输出行数随数据变化，graph replay 难固定 |
-| 去重统计 | `unique`、`unique_consecutive` | 统计 expert id、block id、request id、调试分布 | 离线分析或低频统计可用；在线路由逻辑优先固定 expert 数或 histogram | 输出集合大小和顺序依赖输入数据，排序/去重开销高 |
-| Mask 压缩 | `masked_select`、boolean indexing | 抽取满足条件的 token/logits/metadata | 适合调试或 CPU 规划；延迟敏感路径用 `where` 保持固定 shape | 输出一维长度动态，后续 buffer 和通信 shape 难规划 |
-| 变长组合 | data-dependent `cat/split` | 不同 request 的变长 token 拼接、动态 batch 构造 | 在 scheduler 侧完成 bucket/padding，再上传固定 shape tensor | allocator 频繁分配，compile/graph 需要 guard 或 graph break |
-| 数据依赖索引 | mask 后 `gather/index_select` | MoE 路由、稀疏 token 选择、cache block 选择 | 将动态选择结果转成固定 top-k、固定 page table 或 padded index | index 数量变化会传导到 kernel launch 和通信 bucket |
-
-Dynamic Shape OP 的主要约束来自图编译、Graph replay 和运行时内存规划，而不是单次 eager 执行的功能语义。在线推理通常把动态性收敛到 CPU侧规划逻辑、bucket、padding、mask、page table 和固定大小 metadata。
+| 类型 | 常见 OP | 使用场景 | 稳定化方式 |
+|------|---------|----------|------------|
+| 位置发现 | `nonzero`、`argwhere` | 找有效 token、稀疏 mask 调试 | 用 fixed mask + padding 保持 shape |
+| 去重统计 | `unique`、`unique_consecutive` | expert/block/request 分布统计 | 在线路径优先 fixed capacity 或 histogram |
+| Mask 压缩 | `masked_select`、boolean indexing | 抽取有效 token/logits | 延迟敏感路径用 `where` 保持原 shape |
+| 动态切分拼接 | data-dependent `cat/split` | 动态 batch、变长 request | scheduler 侧 bucket + padding |
+| 数据依赖索引 | mask 后 `gather/index_select` | MoE token 选择、KV block 选择 | 固定 top-k、padded index、sentinel |
 
 ### 1.5 Graph OP
 
-Graph OP 用于复用固定 shape、固定地址、固定执行序列，降低 launch 和 Python 调度开销。MUSA/CUDA Graph 的核心关注点不在数学计算优化，而在于把已经确定的 DEVICE侧计算链路录制下来，后续只 replay。
+Graph OP 用于固定 shape、固定地址、固定执行序列的 replay。Graph 不会让单个数学 OP 自动变快，它减少的是 Python 调度和 kernel launch 开销，适合 decode 这种小 batch、多 kernel、重复执行的路径。
 
-| 阶段 | 常见 API/OP | 如何使用 | 注意事项 |
-|------|-------------|---------|---------|
-| 预分配 | `empty/new_empty/zeros` | capture 前创建固定 input/output/metadata buffer | replay 中不能替换 tensor 对象 |
-| 录制 | `MUSAGraph`、graph context、warmup | 使用固定 shape 和固定地址执行一次 | 动态 shape、CPU sync、不支持 capture 的 backend 会失败 |
-| 更新输入 | `copy_/fill_/zero_/_foreach_copy_` | replay 前只改固定 buffer 内容 | 新分配或对象替换破坏 capture 假设 |
-| 执行 | `graph.replay()` | 在相同 bucket 下复用录制路径 | batch/seq 超出 capture bucket 需要重新选择 graph |
-
-Graph 并不会让单个 OP 自动变快；它会把固定 shape、固定地址、固定执行序列的 DEVICE侧计算录制下来，在后续 decode 中反复 replay，从而减少 Python 调度和 kernel launch 开销。SGLang DeepSeek V4 的 decode graph 依赖 `copy_` metadata、padding bucket、CPU侧元数据副本和固定 graph input buffer；排查时需要关注 replay 前是否只更新既有 buffer 内容，以及 replay 内是否保持固定 shape、固定地址和固定执行路径。
-
-### 1.6 从 OP 到 LLM 结构
-
-介绍常见 PyTorch OP 时，先说明 API 的功能、输入输出和注意事项，再放到 LLM 结构中观察它们的组合方式和性能边界。`view/contiguous` 常出现在 QKV layout、RoPE、MoE buffer；`topk/gather/where` 常出现在 MoE routing、sparse attention 和 sampling；`copy_/fill_/zero_` 常出现在 graph replay 前的固定 buffer 更新；`.cpu/.item/.tolist` 属于 CPU-DEVICE 边界；`nonzero/unique/masked_select` 等 dynamic shape OP 更适合调试或 CPU 规划。
-
-| LLM 结构 | 主要 OP | 典型作用 | 后续案例 |
-|----------|---------|--------------------------|--------------|
-| Embedding/Position | `embedding`、`arange`、`repeat_interleave`、`to(int32)` | 把 token/request 级信息展开成 DEVICE侧输入 | §2.1 |
-| Attention/KV cache | `F.linear`、`view`、`transpose`、`where`、`softmax`、indexing、`copy_` | 组织 QKV layout、计算 attention、写 KV cache | §2.2 |
-| RMSNorm/MLP | `square`、`mean`、`rsqrt`、`chunk`、`silu`、`mul`、`clamp` | 表达 norm、SwiGLU 和 projection | §2.3 |
-| MoE | `topk`、`gather`、`where`、`scatter_`、`sum`、all-reduce | 路由、expert dispatch、combine 和并行归约 | §2.4 |
-| Logits/Sampling | `matmul/F.linear`、`topk`、`softmax`、`.cpu()` | 生成候选 token，并只回传必要结果 | §2.5 |
-| Metadata/Graph | `copy_`、`fill_`、`zero_`、`pad`、`graph.replay()` | 把动态请求整理成固定 buffer 并 replay | §2.6 |
-
-后面的内容按这个顺序推进：先按 LLM 结构说明 OP 怎么用，再分析常见性能问题，最后用 DeepSeek V4/Pro 核心模块和 MUSA 最小用例做验证。源码细节集中放在附录，避免主线被实现细节淹没。
-
-## 2. LLM 经典结构中的 PyTorch OP 使用
-
-LLM 推理/训练中的 PyTorch OP 会围绕固定结构反复组合。Embedding、Attention、MLP、MoE、Logits/Sampling、Metadata/Graph 六类结构覆盖了大部分高频 OP。分析这些结构时，重点放在 OP 的输入输出 shape、layout/dtype、分配行为、同步边界和 fallback 风险。
-
-```mermaid
-flowchart LR
-    A["token ids"] --> B["Embedding / Position"]
-    B --> C["Attention / KV cache"]
-    C --> D["RMSNorm / MLP"]
-    D --> E["MoE, optional"]
-    E --> F["Logits / Sampling"]
-    G["CPU scheduler / metadata"] --> C
-    G --> H["Graph buffer update"]
-    H --> C
-```
-
-### 2.1 Embedding、Position 与 RoPE
-
-| 结构 | 常见 OP | 输入输出 | 用法 | 性能风险 |
-|------|---------|----------|------|----------|
-| Token embedding | `F.embedding`、indexing | `input_ids[int] -> hidden[*, hidden_size]` | 根据 token id 读取 embedding table；TP 场景可能先 mask 本 rank 词表范围 | 词表分片后需要 all-reduce 或 all-gather；越界 mask 处理错误会污染 hidden |
-| Position ids | `arange`、`repeat_interleave`、`cat`、`to(int32)` | request 长度 -> token 级 position | prefill 阶段展开变长 request，decode 阶段追加单 token position | 频繁构造小 tensor 会增加 H2D copy；position dtype 不一致会触发额外 cast |
-| RoPE | `view/unflatten`、`view_as_complex`、`polar`、`copy_` | Q/K 的 rope 维 -> 旋转后的 Q/K | 先把最后一维整理成复数或 pair layout，再执行旋转；部分实现用 fused kernel | 非 contiguous 输入会导致隐式 copy；inplace RoPE 要确认写入范围和 dtype |
-
-### 2.2 Attention 与 KV Cache
-
-Attention 是 OP 最密集的结构之一。Q/K/V projection 主要是 GEMM，之后会出现 layout 整理、mask、softmax、KV cache 写入、paged index、top-k sparse index 等操作。
-
-| 阶段 | 常见 OP | 用法 | 注意事项 |
-|------|---------|------|----------|
-| QKV projection | `F.linear`、`matmul`、量化 GEMM wrapper | 生成 Q/K/V 或 LoRA 中间向量 | 关注 dtype、scale layout、weight packing、GEMM backend 是否命中 |
-| Head layout | `view`、`reshape`、`unflatten`、`transpose`、`contiguous` | 把 `[tokens, hidden]` 整理成 `[tokens, heads, head_dim]` | `view` 要求 stride 兼容；`reshape` 可能隐式 copy；custom kernel 前常需要 `contiguous()` |
-| Mask/score | `where`、`masked_fill`、`softmax`、`sum` | causal mask、attention score、online softmax reference | 大规模路径通常由 FlashAttention/FlashMLA/自定义 kernel 融合；PyTorch reference 适合验证语义 |
-| KV cache | indexing、`copy_`、`scatter_`、`div`、`%` | 把 K/V 写入 page/block/slot | index dtype、越界、重复写、page table shape 都会影响正确性和 Graph replay |
-| Sparse/Compressed attention | `topk`、`gather`、`cat`、`to(int32)` | 选择压缩块或稀疏 KV index | top-k shape 要固定；index 构造最好在 graph 外或固定 buffer 中完成 |
-
-### 2.3 RMSNorm、MLP 与 SwiGLU
-
-Dense MLP 和 Norm 的 PyTorch 写法通常很短，但在大模型中会对应多个高频 kernel。未融合的 `square -> mean -> rsqrt -> mul`、`silu -> mul`、`clamp -> activation` 会产生多次 kernel launch 和 HBM 读写。
-
-| 结构 | 常见 OP | 用法 | 性能风险 |
-|------|---------|------|----------|
-| RMSNorm | `float`、`square`、`mean`、`rsqrt`、`mul`、`to(dtype)` | 用 FP32 计算方差，再转回输入 dtype | reference 清晰但 launch 多；在线路径通常需要 fused RMSNorm |
-| MLP gate/up | `F.linear`、merged linear、`chunk/split` | 一次投影生成 gate/up 两路中间结果 | `chunk` 只改 view，后续 kernel 要求连续时可能需要 copy |
-| SwiGLU | `silu`、`mul`、`clamp/clamp_` | `silu(gate) * up`，部分模型会先限幅 | `clamp_` 是原地写，必须确认后续不再需要原值；未融合会多次读写中间 tensor |
-| Down projection | `F.linear`、quant GEMM、all-reduce | 把 intermediate 投回 hidden size | TP 归约的等待点会影响计算通信重叠 |
-
-### 2.4 MoE Routing、Expert 与 Combine
-
-MoE 把 dense MLP 拆成 router、expert dispatch、expert GEMM、activation、combine 和 shared expert。PyTorch OP 能清楚表达语义，但高吞吐推理通常需要 fused MoE 或 native backend。
-
-| 阶段 | 常见 OP | 输入输出 | 注意事项 |
-|------|---------|----------|----------|
-| Router score | `F.linear`、`softmax/sigmoid/softplus` | `[tokens, hidden] -> [tokens, experts]` | score dtype 和归一化方式要与训练配置一致 |
-| Expert 选择 | `topk`、`gather` | expert logits -> top-k id/weight | top-k 输出 shape 固定，适合传给 fused kernel；排序稳定性影响调试复现 |
-| Dispatch | `where`、`index_select`、`scatter_`、`bincount` | token -> expert bucket | `nonzero/where` 产生动态数量，容易破坏 Graph；在线路径常用 padding 或固定 expert capacity |
-| Expert MLP | grouped GEMM、`silu`、`mul`、`clamp` | expert token -> expert output | 多 expert 小 GEMM 容易低利用率，需要 grouped/fused GEMM |
-| Combine | `unsqueeze`、broadcast、`sum`、all-reduce | top-k expert output -> token output | combine 权重 shape、通信等待点、重复 index 都要明确 |
-
-### 2.5 Logits、Sampling 与 CPU 边界
-
-Logits 和 sampling 阶段常见 `matmul/F.linear`、`softmax/log_softmax`、`topk`、`argmax`、`where`、`.cpu()`、`.tolist()`。原则是：DEVICE侧完成大张量计算，只把最终 token、必要 logprob 或统计值带回 CPU侧。完整 logits、hidden states 或大块 metadata 回 CPU 会触发同步和 D2H copy。
-
-| 场景 | 常见 OP | 推荐用法 | 风险 |
-|------|---------|----------|------|
-| LM head | `F.linear`、`matmul` | 只计算需要的 token 位点；TP/DP head 注意 gather/reduce | 全量 logits 占用显存和带宽 |
-| top-k/top-p | `topk`、`sort`、`where`、`softmax` | 在 DEVICE侧过滤候选 token | 候选数量动态会影响 graph/compile |
-| 回传结果 | `.cpu()`、`.tolist()`、`.item()` | 只回传最终 token 和少量统计 | 放在 decode 单步中会形成 CPU-DEVICE 同步边界 |
-
-### 2.6 Metadata、Graph 与 Compile
-
-推理框架会把动态请求整理成固定 shape 的 DEVICE侧 metadata，再交给 Graph replay 或 backend kernel。常见 OP 是 `copy_`、`fill_`、`zero_`、`pad`、`to(int32)`、`_foreach_copy_` 和 `graph.replay()`。
-
-| 目标 | 常见 OP | 用法 | 注意事项 |
-|------|---------|------|----------|
-| 固定 buffer 更新 | `copy_`、`fill_`、`zero_` | replay 前只改已有 tensor 内容 | 不能替换 capture 时绑定的 tensor 对象 |
-| dtype 对齐 | `to(torch.int32)`、`int/long` | metadata 统一成 backend 需要的 dtype | 隐式 cast 会增加小开销，也可能触发 kernel 不匹配 |
-| padding/bucket | `pad`、slice、`cat` | 把动态 batch 整理到 capture bucket | padding 槽位必须清理，避免读到上一轮残留 |
-| compile/graph | `torch.compile`、Graph capture/replay | 编译或录制固定 OP 链 | 动态 shape、CPU sync、allocator 和 unsupported backend 会导致 graph break 或 capture 失败 |
-
-## 3. 常见性能问题与注意事项
-
-PyTorch OP 的性能问题通常不是“某个 API 慢”这么简单，而是 API 放在了错误的位置：layout 转换进入热点路径，reference OP 链没有融合，动态 shape 进入 graph，或者 CPU 读取了 DEVICE侧结果。下面按最常见的问题归类。
-
-### 3.1 Layout 与隐式 Copy
-
-| 现象 | 常见触发 OP | 原因 | 处理方式 |
+| 阶段 | 常见 API/OP | 用法 | 注意事项 |
 |------|-------------|------|----------|
-| `reshape` 后性能抖动 | `reshape`、`permute`、`transpose` | stride 不兼容时 `reshape` 会分配新 tensor | 能用 `view` 时优先 `view`；custom kernel 前显式检查 `is_contiguous/stride` |
-| kernel 前多一次 copy | `contiguous()` | 后端只支持连续布局 | 把 layout 转换前移或融合；避免每步重复转换同一类 tensor |
-| broadcast 写入错误 | `expand`、inplace OP | `expand` 可能产生 zero-stride view | expanded tensor 不适合作为原地写目标，必要时先 `clone/contiguous` |
+| 预分配 | `empty`、`new_empty`、`zeros` | capture 前创建固定 input/output/metadata buffer | replay 中不能替换 tensor 对象 |
+| warmup/capture | `Stream`、`MUSAGraph`、`capture_begin/capture_end` | 用固定 shape 和固定地址执行一次 | allocator、kernel cache、backend 状态需要提前稳定 |
+| 更新输入 | `copy_`、`_foreach_copy_`、`fill_`、`zero_` | replay 前只改 buffer 内容 | 新分配和对象替换会破坏 capture 假设 |
+| 执行 | `graph.replay()` | 相同 bucket 下复用录制路径 | dynamic shape、CPU sync、不支持 capture 的调用会导致失败 |
 
-### 3.2 分配、初始化与 Buffer 生命周期
+## 2. OP 常见注意事项和性能问题
 
-`empty/new_empty/empty_like` 只分配内存，不初始化。它适合高频路径预分配 workspace，但必须保证后续 kernel 完整写入。decode 或 graph replay 中频繁创建新 tensor，会触发 allocator、改变地址，并破坏 capture/replay 的固定地址假设。
+看 PyTorch OP 的性能，不能只看 API 名字。更可靠的方式是把 OP 放回具体执行链路，确认它是否产生真实 copy、是否分配新 tensor、是否触发 CPU-DEVICE 同步、是否制造动态 shape，以及是否落到预期执行路径。
+
+### 2.1 Layout 与隐式 Copy
+
+`view/reshape/transpose/permute/contiguous` 是 Transformer 中最常见的 layout OP。`view` 通常是零拷贝，但要求 stride 兼容；`reshape` 在 stride 不兼容时可能分配新 tensor；`contiguous()` 会把非连续 layout 复制成连续内存。QKV head layout、RoPE 输入、KV cache layout 和 custom kernel 输入都依赖这类 OP。
+
+| 现象 | 常见 OP | 根因 | 处理方式 |
+|------|---------|------|----------|
+| `reshape` 后延迟抖动 | `reshape`、`permute`、`transpose` | stride 不兼容导致隐式 copy | 能用 `view` 时优先 `view`；kernel 前显式检查 `stride/is_contiguous` |
+| kernel 前多一次 copy | `contiguous()` | 目标 kernel 只支持连续输入 | 把 layout 转换前移、复用转换结果，或融合到 kernel 内 |
+| broadcast 写错 | `expand` + inplace OP | expanded tensor 可能是 zero-stride view | 不对 expanded view 原地写，必要时先 `clone/contiguous` |
+
+### 2.2 分配、初始化与 Buffer 生命周期
+
+`empty/new_empty/empty_like` 只分配内存，不初始化。高频推理路径经常用它们预分配 workspace，但后续 kernel 必须完整写入。Graph replay 更进一步要求 input/output/metadata tensor 的对象地址保持不变，所以 replay 前应使用 `copy_/fill_/zero_` 更新内容，而不是创建新 tensor。
 
 | 场景 | 推荐方式 | 风险 |
 |------|----------|------|
-| graph input/output | capture 前预分配，replay 前 `copy_` 更新内容 | replay 中替换 tensor 对象会失效 |
-| padding 区域 | replay 前 `fill_/zero_` 清理 | padding 槽位残留会影响 attention、sampling 或 metadata |
-| 临时 workspace | 按 bucket 复用 | 每步分配会增加 allocator 开销和地址不稳定 |
+| graph input/output | capture 前预分配，replay 前 `copy_` 更新内容 | replay 中替换 tensor 对象会破坏固定地址 |
+| padding 槽位 | replay 前 `fill_/zero_` 清理 | 残留值会影响 attention mask、cache 或 logits |
+| 临时 workspace | 按 batch/seq bucket 复用 | 每步分配增加 allocator 开销和地址不稳定 |
 
-### 3.3 未融合 OP 链
+### 2.3 未融合 OP 链
 
-RMSNorm、SwiGLU、attention softmax、MoE combine 等结构经常由多个 PyTorch OP 串起来表达语义。reference 写法便于验证，但延迟敏感路径应优先使用 fused/native kernel。
+RMSNorm、SwiGLU、attention softmax、MoE combine 常用多个 PyTorch OP 表达 reference 语义。reference 写法清晰，但在线热点路径会多次读写 HBM，并产生多次 kernel launch。
 
 | OP 链 | 语义 | 性能问题 |
 |-------|------|----------|
-| `square -> mean -> rsqrt -> mul` | RMSNorm | 多次读取 hidden states，多次 launch |
-| `chunk -> silu -> clamp -> mul` | SwiGLU | 中间 tensor 读写多，activation 与 clamp 未融合 |
-| `where/nonzero -> index_select -> scatter` | MoE dispatch/combine | 动态 token 数导致分配和调度复杂 |
-| `softmax -> matmul` | attention reference | 大中间 score tensor 占用显存和带宽 |
+| `square -> mean -> rsqrt -> mul` | RMSNorm / Q norm | 多次读取 hidden states，多次 launch |
+| `chunk -> silu -> clamp -> mul` | SwiGLU | 中间 tensor 多，激活和乘法未融合 |
+| `softmax -> matmul` | attention reference | score tensor 大，占显存和带宽 |
+| `where/nonzero -> index_select -> scatter` | MoE dispatch/combine | token 数动态，allocator 和调度复杂 |
+| `topk -> gather -> normalize` | MoE routing / sampling | top-k shape、排序和 dtype 会传导到后续 kernel |
 
-### 3.4 CPU-DEVICE 同步边界
+### 2.4 CPU-DEVICE 同步边界
 
-`.item()`、`.tolist()`、`.cpu()`、`.numpy()` 会让 CPU侧等待 DEVICE侧结果。它们可以出现在日志、调试、最终 token 回传或 CPU侧元数据副本上，不适合放进 decode 单步的热点路径。
+`.item()`、`.tolist()`、`.cpu()`、`.numpy()` 是最容易被忽略的同步来源。对 CPU tensor 调用它们通常没问题；对 GPU/MUSA tensor 调用时，CPU 需要等待前序 DEVICE 计算完成，再做 D2H 拷贝或标量读取。
 
-| 用法 | 合理位置 | 风险位置 |
-|------|----------|----------|
-| `.item()` | CPU tensor、loss scalar、benchmark 结束 | GPU seq lens、GPU logits、graph 内部分支 |
-| `.tolist()` | CPU scheduler 的长度列表、最终 token 列表 | MoE expert 统计从 GPU 回读后驱动 Python loop |
+| API | 合理位置 | 风险位置 |
+|-----|----------|----------|
+| `.item()` | CPU侧元数据副本、最终标量、benchmark 结束 | GPU seq_lens、GPU logits、Graph 内部分支 |
+| `.tolist()` | CPU scheduler 的长度列表、最终 token 列表 | GPU 上 `bincount` 后回读并驱动 Python expert loop |
 | `.cpu()` | 最终输出、少量 logprob、离线分析 | 完整 logits、hidden states、KV metadata |
+| `synchronize()` | profiling 边界、错误定位 | decode 单步、通信计算重叠区 |
 
-### 3.5 Dynamic Shape、Graph Break 与 Capture 失败
+### 2.5 Dynamic Shape、Compile 与 Graph
 
-`nonzero/unique/masked_select`、mask 后变长 `index_select`、数据相关 `cat/split` 的输出 shape 会随数据变化。它们在 eager 中很自然，但会影响 `torch.compile` 的 guard、Graph capture 的固定 shape、通信 bucket 和 workspace 复用。
+`nonzero/unique/masked_select`、mask 后变长 `index_select`、数据相关 `cat/split` 会让输出 shape 随输入内容变化。它们在 eager 模式表达力强，但会让 `torch.compile` 产生 guard 或 graph break，也会破坏 Graph replay 的固定 shape/固定地址约束。
 
 | 动态来源 | 典型 OP | 更稳定的表达 |
 |----------|---------|--------------|
 | 有效 token 数变化 | `nonzero`、boolean indexing | fixed mask + padding |
-| expert 负载变化 | `where`、`bincount(...).tolist()` | fixed top-k、固定 expert capacity、fused MoE metadata |
+| expert 负载变化 | `where`、`bincount(...).tolist()` | fixed top-k、固定 expert capacity、padded metadata |
 | request 长度变化 | data-dependent `cat/split` | CPU scheduler bucket + fixed metadata |
-| sparse index 数量变化 | `topk` 的 k 动态 | 固定 k，超出部分用 sentinel/padding |
+| sparse index 数量变化 | 动态 `topk(k)` | 固定 k，超出部分用 sentinel/padding |
 
-### 3.6 dtype、量化与 Fallback
+### 2.6 dtype、量化与 Fallback
 
-FP16/BF16/FP8/FP4、scale tensor、packed weight 和 backend kernel 是一组约束。`to(dtype)` 不只是转换精度，也可能改变 kernel 选择、scale layout 和 graph capture 能力。量化路径中要明确 activation scale、weight scale、block size、packed layout 和输出 dtype。
+BF16/FP16/FP8/FP4、activation scale、weight scale、block size、packed layout 和输出 dtype 是一组接口约束。`to(dtype)` 不只是精度转换，也可能改变 kernel 路径、Graph capture 能力和数值误差分布。
 
 | 问题 | 表现 | 处理方式 |
 |------|------|----------|
-| backend 未命中 | 回退到 PyTorch reference 或通用 kernel | 打印/统计 backend path，确认 dtype/layout 支持 |
-| scale layout 不匹配 | FP8/FP4 GEMM 结果错误或性能异常 | 固定 block size，明确 scale shape 和连续性 |
-| dtype 来回转换 | 多余 `float/half/bfloat16/to` | 在模块边界集中转换，避免 OP 间反复 cast |
-| unsupported dtype | silent fallback 或报错 | 对不支持组合显式报错或走受控 fallback |
+| dtype/layout 不匹配 | fallback 到 PyTorch reference 或通用 kernel | 打印/统计执行路径，确认输入满足 kernel 约束 |
+| scale layout 不匹配 | FP8/FP4 GEMM 结果错误或性能异常 | 固定 block size，明确 scale shape、stride 和连续性 |
+| 反复 cast | 多余 `float/half/bfloat16/to` | 在模块边界集中转换 |
+| silent fallback | 语义正确但性能异常 | 对不支持组合显式报错或受控 fallback |
 
-## 4. DeepSeek V4/Pro 核心源码中的 OP 解读
+## 3. Transformer 架构中的 OP 组织
 
-DeepSeek V4/Pro 的价值在于它把前面讨论的 OP 都放到了真实 LLM 结构里：FP8/FP4 Linear 体现 dtype 和量化 scale 约束，Compressed Attention 体现 layout、top-k index 和 sparse kernel 输入，MoE/HC 体现 reference OP 链与融合实现的边界，SGLang runtime 体现 metadata、Graph replay 和固定 buffer 的执行约束。下面只摘核心片段，重点解释 OP 的输入输出、用途和性能风险。
+Transformer 可以看成一组 OP 模板反复堆叠：token id 先进入 embedding 和 position/RoPE，hidden states 经过 attention 与 KV cache，再经过 RMSNorm、MLP/SwiGLU 或 MoE，最后进入 logits 和 sampling。训练还会加入 loss、backward、optimizer 和分布式通信；推理更关注 KV cache、Graph replay、CPU scheduler 和 sampling 边界。
 
-### 4.1 FP8/FP4 Linear：dtype 分派、scale 与 packed weight
+```mermaid
+flowchart LR
+    A["token ids"] --> B["Embedding / Position"]
+    B --> C["QKV Linear + RoPE"]
+    C --> D["Attention + KV cache"]
+    D --> E["RMSNorm"]
+    E --> F["MLP / SwiGLU / MoE"]
+    F --> G["LM head"]
+    G --> H["Sampling"]
+    I["CPU scheduler / metadata"] --> D
+    I --> J["Graph buffer update"]
+    J --> C
+```
 
-源码位置：DeepSeek V4-Pro `inference/model.py`、`inference/kernel.py`。
+一层典型 Transformer block 的源码结构可以简化成下面这样。后面的 3.1 到 3.5 会按这条链路拆开分析每段源码中的 OP：
+
+```python
+def transformer_forward(input_ids, positions, attn_mask, kv_cache):
+    hidden = embed_tokens(input_ids)
+    for layer in layers:
+        residual = hidden
+        hidden = layer.input_norm(hidden)
+        attn_out, kv_cache = layer.attention(hidden, positions, attn_mask, kv_cache)
+        hidden = residual + attn_out
+
+        residual = hidden
+        hidden = layer.post_attention_norm(hidden)
+        hidden = residual + layer.mlp(hidden)
+
+    hidden = final_norm(hidden)
+    logits = lm_head(hidden[:, -1])
+    next_token = sample(logits)
+    return next_token, kv_cache
+```
+
+源码里的 OP 组织有三个层次：第一层是数学语义，例如 `linear`、`softmax`、`silu`、`sum`；第二层是 layout 和 metadata，例如 `view`、`transpose`、`arange`、`copy_`；第三层是服务化边界，例如 `.cpu()`、Graph replay、KV cache page 写入。性能问题通常不是某个 OP 单独出现，而是它出现在了高频路径、动态 shape 路径或 CPU-DEVICE 边界上。
+
+### 3.1 Embedding、Position 与 RoPE
+
+Embedding 阶段把离散 token id 变成 hidden states，position 阶段生成每个 token 的位置信息，RoPE 把 position 注入 Q/K 的部分维度。常见 OP 是 `embedding`、`arange`、`repeat_interleave`、`to(int32/int64)`、`view/unsqueeze`、`sin/cos`、`mul/add`。
+
+典型源码：
+
+```python
+def embedding_and_rope(input_ids, q, k, start_pos, freqs_cis):
+    hidden = F.embedding(input_ids, embed_weight)
+    positions = torch.arange(
+        start_pos,
+        start_pos + input_ids.numel(),
+        device=input_ids.device,
+        dtype=torch.long,
+    )
+
+    q = q.view(-1, num_heads, head_dim)
+    k = k.view(-1, num_kv_heads, head_dim)
+    q_rope, q_pass = q[..., :rope_dim], q[..., rope_dim:]
+    k_rope, k_pass = k[..., :rope_dim], k[..., rope_dim:]
+
+    freqs = freqs_cis[positions].unsqueeze(1)
+    q_rope = apply_rotary(q_rope, freqs)
+    k_rope = apply_rotary(k_rope, freqs)
+    q = torch.cat([q_rope, q_pass], dim=-1)
+    k = torch.cat([k_rope, k_pass], dim=-1)
+    return hidden, positions, q, k
+```
+
+源码解析：
+
+- `F.embedding` 的输入是 token id，输出是 `[tokens, hidden]`；token id dtype 和 device 不匹配会直接影响查表。
+- `torch.arange` 生成 position id，prefill 常生成一段连续位置，decode 常只生成新增 token 的位置。
+- `view` 把 Q/K 从扁平 hidden 维整理成 head layout；如果上游 projection 输出 layout 不兼容，后面需要显式处理 `contiguous()`。
+- `unsqueeze(1)` 给 RoPE 频率补 head 维，依赖 broadcast；它通常不复制数据。
+- `cat` 把 RoPE 维和 pass-through 维拼回完整 head_dim；拼接会产生新 tensor，热点路径常由 fused RoPE 或 attention prepare kernel 处理。
+
+| 子模块 | 常见 OP | 组织方式 | 注意事项 |
+|--------|---------|----------|----------|
+| Token embedding | `F.embedding`、indexing | token id -> `[tokens, hidden]` | token id dtype 通常是 int64/int32，device 要一致 |
+| Position | `arange`、`repeat_interleave`、`cat` | 生成 prefill/decode positions | 变长请求通常在 CPU scheduler 侧整理成固定 metadata |
+| RoPE | `view/reshape`、`unsqueeze`、`mul/add` | Q/K 按 head_dim 拆分后旋转 | layout 要匹配 attention kernel；避免不必要 `contiguous()` |
+
+### 3.2 Attention 与 KV Cache
+
+Attention 是 OP 组织最密集的模块：`F.linear/matmul` 生成 Q/K/V，`view/transpose/unflatten` 整理 head layout，RoPE 更新 Q/K，attention kernel 读取 Q/K/V 和 metadata，KV cache 通过 indexing 或 custom kernel 写入 page/slot。
+
+典型源码：
+
+```python
+def attention_forward(hidden, attn_mask, kv_cache, slot_mapping):
+    qkv = F.linear(hidden, qkv_weight, qkv_bias)
+    q, k, v = qkv.chunk(3, dim=-1)
+
+    q = q.view(batch, seq, num_heads, head_dim).transpose(1, 2)
+    k = k.view(batch, seq, num_kv_heads, head_dim).transpose(1, 2)
+    v = v.view(batch, seq, num_kv_heads, head_dim).transpose(1, 2)
+
+    page_idx = torch.div(slot_mapping, page_size, rounding_mode="floor")
+    page_offset = slot_mapping % page_size
+    k_for_cache = k.transpose(1, 2).reshape(-1, num_kv_heads, head_dim)
+    v_for_cache = v.transpose(1, 2).reshape(-1, num_kv_heads, head_dim)
+    kv_cache[page_idx, page_offset, 0] = k_for_cache
+    kv_cache[page_idx, page_offset, 1] = v_for_cache
+
+    scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+    scores = scores.masked_fill(attn_mask, float("-inf"))
+    probs = torch.softmax(scores, dim=-1)
+    out = torch.matmul(probs, v)
+    out = out.transpose(1, 2).contiguous().view(batch, seq, hidden_size)
+    return F.linear(out, o_weight), kv_cache
+```
+
+源码解析：
+
+- `F.linear` 生成 QKV，是 attention 的主要 GEMM 入口；量化模型还要看 activation scale、weight scale 和 packed layout。
+- `chunk(3, dim=-1)` 按 hidden 最后一维切分 Q/K/V，要求 qkv projection 输出维度严格匹配。
+- `view + transpose` 把 `[batch, seq, hidden]` 变成 `[batch, heads, seq, head_dim]`；`transpose` 后通常是非连续 layout。
+- `slot_mapping -> div/% -> advanced indexing` 表达 Paged KV cache 写入，page index、offset 和 token 顺序必须一致。
+- `matmul -> masked_fill -> softmax -> matmul` 是 attention reference 链路；大模型在线推理通常用 fused attention kernel 避免显式 materialize 大 score tensor。
+- `transpose(...).contiguous().view(...)` 是 attention 输出回到 hidden layout 的常见写法，`contiguous()` 可能成为额外 copy。
+
+| 子模块 | 常见 OP | 组织方式 | 注意事项 |
+|--------|---------|----------|----------|
+| QKV projection | `F.linear`、`matmul` | hidden -> Q/K/V | dtype、weight layout、activation scale 决定执行路径 |
+| Head layout | `view`、`unflatten`、`transpose`、`contiguous` | `[tokens, hidden]` -> `[tokens, heads, head_dim]` | stride 不匹配会触发 copy 或 kernel 输入错误 |
+| Mask/score | `where`、`masked_fill`、`softmax`、`matmul/einsum` | reference attention 或小规模验证 | 大规模在线推理通常由 fused attention kernel 执行 |
+| KV cache | advanced indexing、`copy_`、`scatter_`、`div/%` | token slot -> page/offset | page index、offset、dtype 和越界检查要明确 |
+
+### 3.3 RMSNorm、MLP 与 SwiGLU
+
+RMSNorm reference 通常是 `square -> mean -> rsqrt -> mul`；MLP/SwiGLU 通常是 `linear -> chunk/split -> silu/sigmoid/gelu -> mul -> linear`。这些 OP 链很好解释数学语义，但在线热点路径通常需要融合。
+
+典型源码：
+
+```python
+def rmsnorm_mlp(hidden, residual):
+    x = hidden.float()
+    rstd = torch.rsqrt(x.square().mean(dim=-1, keepdim=True) + eps)
+    normed = (x * rstd).to(hidden.dtype) * norm_weight
+
+    gate_up = F.linear(normed, gate_up_weight)
+    gate, up = gate_up.chunk(2, dim=-1)
+    gate = F.silu(gate)
+    intermediate = gate * up
+    out = F.linear(intermediate, down_weight)
+    return residual + out
+```
+
+源码解析：
+
+- `float()` 常用于提升 norm 计算精度，但会引入 dtype 转换；输出通常再 cast 回模型 dtype。
+- `square -> mean -> rsqrt -> mul` 清晰表达 RMSNorm，但会产生多个逐元素/归约 OP。
+- `F.linear` 生成 gate/up 两路，再用 `chunk` 切开；`chunk` 返回 view，后续 OP 共享上游 storage 视图。
+- `silu(gate) * up` 是 SwiGLU 的核心语义；如果有 `clamp_`，它会原地覆盖 gate/up 分支。
+- `residual + out` 是残差加法，训练中还会影响 autograd 保存 tensor；推理中通常关注是否能与 norm 或 projection 融合。
+
+| 子模块 | 常见 OP | 组织方式 | 注意事项 |
+|--------|---------|----------|----------|
+| RMSNorm | `square`、`mean`、`rsqrt`、`mul` | hidden 归一化 | reduction 维度和 eps 要固定；多个小 OP 容易 launch 多 |
+| Gate/Up | `F.linear`、`chunk`、`split` | hidden -> gate/up | split 后 view 的 layout 要满足后续激活 |
+| SwiGLU | `silu`、`sigmoid`、`clamp`、`mul` | activation(gate) * up | `clamp_` 是原地写，会覆盖输入 |
+| Down projection | `F.linear`、`matmul` | intermediate -> hidden | 量化路径要关注 scale 和 packed weight |
+
+### 3.4 MoE Routing、Expert 与 Combine
+
+MoE 在 Transformer 中把 MLP 替换为多个 expert。Router 先用 `linear/softmax/topk/gather` 选 expert，dispatch 把 token 发到 expert，expert MLP 计算后再 combine。reference 代码常用 `where/index_select/scatter/sum` 表达语义；高性能实现会把 dispatch、grouped GEMM 和 combine 融合或批处理。
+
+典型源码：
+
+```python
+def moe_forward(hidden):
+    router_logits = F.linear(hidden, router_weight)
+    router_probs = torch.softmax(router_logits, dim=-1)
+    topk_weight, topk_id = torch.topk(router_probs, k=num_experts_per_token, dim=-1)
+    topk_weight = topk_weight / topk_weight.sum(dim=-1, keepdim=True)
+
+    output = torch.zeros_like(hidden)
+    for expert_id in range(num_experts):
+        token_idx, choice_idx = torch.where(topk_id == expert_id)
+        if token_idx.numel() == 0:
+            continue
+        expert_in = hidden[token_idx]
+        expert_out = experts[expert_id](expert_in)
+        output[token_idx] += expert_out * topk_weight[token_idx, choice_idx].unsqueeze(-1)
+    return output
+```
+
+源码解析：
+
+- `F.linear -> softmax -> topk` 把 dense expert score 变成固定 top-k expert id 和权重。
+- `topk_weight / sum(...)` 做权重归一化，`keepdim=True` 保证 broadcast shape 稳定。
+- `zeros_like` 创建输出 buffer；如果后续路径没有完整覆盖，初值会影响 combine 结果。
+- `where(topk_id == expert_id)` 产生动态长度索引，reference 代码可读，但不适合 Graph replay 内部。
+- `hidden[token_idx]` 和 `output[token_idx] += ...` 是 advanced indexing；重复 index、累加顺序和 dtype 都会影响数值。
+- 在线推理常把 token dispatch、grouped GEMM 和 combine 放进融合或批处理实现，避免 Python expert loop 和动态小 GEMM。
+
+| 阶段 | 常见 OP | 组织方式 | 注意事项 |
+|------|---------|----------|----------|
+| Router score | `linear`、`softmax/sigmoid` | hidden -> expert score | score dtype 和归一化方式要与模型配置一致 |
+| Expert 选择 | `topk`、`gather` | score -> top-k id/weight | top-k 输出 shape 建议固定 |
+| Dispatch | `where`、`index_select`、`scatter_`、`bincount` | token -> expert bucket | 动态 token 数会影响 Graph 和通信 bucket |
+| Expert MLP | grouped GEMM、`silu`、`mul` | expert hidden -> expert output | 多 expert 小 GEMM 容易低利用率 |
+| Combine | `unsqueeze`、broadcast、`sum`、all-reduce | expert output -> token output | 权重 shape、重复 expert 和通信 wait 点要明确 |
+
+### 3.5 Logits、Sampling 与 Graph Replay
+
+LM head 用 `F.linear/matmul` 把 hidden 映射到 vocab logits；sampling 用 `softmax/topk/argmax/where` 选择 token。在线服务中，完整 logits 不应该频繁回 CPU，CPU侧只需要最终 token、少量 logprob 和统计信息。decode 阶段还会把 input、positions、seq_lens、page table 等写入固定 buffer，再通过 Graph replay 执行固定路径。
+
+典型源码：
+
+```python
+def decode_step(input_ids, positions, fixed_buffers, graph=None):
+    fixed_buffers.input_ids[: input_ids.numel()].copy_(input_ids)
+    fixed_buffers.positions[: positions.numel()].copy_(positions)
+    fixed_buffers.seq_lens.fill_(1)
+
+    if graph is not None:
+        graph.replay()
+        logits = fixed_buffers.logits
+    else:
+        hidden = model_forward(fixed_buffers.input_ids, fixed_buffers.positions)
+        logits = F.linear(hidden[:, -1], lm_head_weight)
+
+    topk_vals, topk_ids = torch.topk(logits, k=top_k, dim=-1)
+    probs = torch.softmax(topk_vals / temperature, dim=-1)
+    next_token = topk_ids[:, 0]
+    return next_token.cpu().tolist(), probs
+```
+
+源码解析：
+
+- `copy_` 把真实请求写入固定 input buffer，服务 Graph replay 的固定地址约束。
+- `fill_` 用于清理或初始化固定 metadata；如果 padding 槽位残留旧值，attention 和 logits 都可能被污染。
+- `graph.replay()` 复用固定 shape 和固定执行序列，减少 Python 调度和 launch 开销。
+- `F.linear(hidden[:, -1], lm_head_weight)` 表示只对最后一个 token 做 LM head，是 decode 常见优化。
+- `topk -> softmax` 保留在 DEVICE侧；`.cpu().tolist()` 只回传最终 token，避免把完整 logits 拉回 CPU。
+
+| 场景 | 常见 OP | 组织方式 | 注意事项 |
+|------|---------|----------|----------|
+| LM head | `F.linear`、`matmul` | hidden -> vocab logits | vocab 大，显存和带宽压力高 |
+| Sampling | `topk`、`softmax`、`argmax`、`where` | logits -> next token | 候选数量动态会影响 graph/compile |
+| CPU 边界 | `.cpu()`、`.tolist()`、`.item()` | 只回传最终 token/少量统计 | 避免完整 logits 回 CPU |
+| Graph replay | `copy_`、`fill_`、`zero_`、`graph.replay()` | replay 前更新固定 buffer | shape、地址和执行序列必须固定 |
+
+## 4. DeepSeek V4-Pro 源码中的 OP 组织
+
+DeepSeek V4-Pro 源码把 Transformer 常见 OP 放进更复杂的结构里：量化 Linear 引入 FP8/FP4、activation scale 和 packed weight；Compressed Attention 引入 sparse index、compressed KV 和 `topk/where/cat`；MoE 引入 router、top-k expert、dispatch/combine；HC/MHC 用 reference OP 链表达可验证语义。正文只保留核心片段，完整源码摘录放在附录 B。
+
+### 4.1 量化 Linear：dtype 分派、activation scale 与 packed weight
+
+DeepSeek V4-Pro 的 `linear` 不是简单的 `F.linear` 包装。权重 dtype 决定执行路径：FP4/FP8 权重先对 activation 做 `act_quant`，再进入量化 GEMM；普通权重才走 PyTorch reference。
 
 ```python
 def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -296,28 +416,16 @@ def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] =
         return F.linear(x, weight)
 ```
 
-```python
-if dtype == torch.float4_e2m1fn_x2:
-    self.weight = nn.Parameter(
-        torch.empty(out_features, in_features // 2, dtype=torch.float4_e2m1fn_x2)
-    )
-    self.weight.scale = self.scale = nn.Parameter(
-        torch.empty(out_features, in_features // fp4_block_size, dtype=torch.float8_e8m0fnu)
-    )
-```
+| 位置 | 关键 OP | 组织方式 | 注意事项 |
+|------|---------|----------|----------|
+| 参数创建 | `torch.empty` | 创建 packed FP4/FP8 weight 和 scale tensor | `empty` 后必须由权重加载完整写入 |
+| activation 量化 | `act_quant`、`to(dtype)` | BF16/FP32 activation -> quant activation + scale | block size、scale dtype 和 layout 是接口约束 |
+| GEMM | `fp4_gemm/fp8_gemm` | quant activation + quant weight + scale -> output | packed layout、scale shape 和输出 dtype 要一致 |
+| reference | `F.linear` | 普通 dtype 或 fallback 路径 | 可以验证语义，但热点路径要确认是否进入预期执行路径 |
 
-这段代码说明了 `linear` 在量化模型里不是一个单一 OP。输入 `x` 是 activation，`weight` 的 dtype 决定路径：FP4/FP8 权重先经过 `act_quant` 生成量化 activation 和 scale，再进入 `fp4_gemm/fp8_gemm`；普通权重才走 `F.linear`。
+### 4.2 Compressed Attention：layout、RoPE、top-k index 与 sparse kernel
 
-| OP | 输入输出 | 用法 | 注意事项 |
-|----|----------|------|-------------|
-| `torch.empty` | shape/dtype -> 未初始化参数或 scale | 构造 FP4 packed weight 和 scale tensor | `empty` 后必须由权重加载完整写入 |
-| `act_quant` | BF16 activation -> FP8 activation + scale | 给量化 GEMM 准备输入 | block size、scale dtype、contiguous layout 是接口约束 |
-| `fp4_gemm/fp8_gemm` | quant activation + quant weight + scale -> 输出 | 承担热点 GEMM | 需要明确 packed FP4 解包、scale apply 和输出 dtype |
-| `F.linear` | 普通 tensor + weight -> 输出 | reference/fallback 路径 | 热点路径落到这里通常说明量化 backend 未命中 |
-
-### 4.2 Compressed Attention：layout、top-k index 与 sparse kernel
-
-源码位置：DeepSeek V4-Pro `inference/model.py`、`inference/kernel.py`。
+Attention 模块先生成 Q/KV，再做 head layout、RoPE、Q norm、KV quant 和 sparse/compressed index，最后调用 sparse attention kernel。这里的 PyTorch OP 主要用于组织输入，而不是单独完成完整 attention 计算。
 
 ```python
 q = self.wq_b(qr)
@@ -338,26 +446,17 @@ topk_idxs = topk_idxs.int()
 o = sparse_attn(q, kv, self.attn_sink, topk_idxs, self.softmax_scale)
 ```
 
-```python
-index_score = torch.einsum("bshd,btd->bsht", q, self.kv_cache[:bsz, :end_pos // ratio])
-index_score = (index_score.relu_() * weights.unsqueeze(-1)).sum(dim=2)
-topk_idxs = index_score.topk(min(self.index_topk, end_pos // ratio), dim=-1)[1]
-topk_idxs = torch.where(mask, -1, topk_idxs + offset)
-```
+| 模块 | 关键 OP | 组织方式 | 注意事项 |
+|------|---------|----------|----------|
+| Q layout | `unflatten/view` | projection 输出 -> `[batch, seq, heads, head_dim]` | stride 不兼容会影响后续 kernel |
+| Q norm | `square`、`mean`、`rsqrt`、`mul_` | 对 Q 做 RMS-like normalization | 多个小 OP 可用于 reference，热点路径关注融合 |
+| KV path | `kv_norm`、`act_quant(..., inplace=True)` | KV norm 后对非 RoPE 维量化 | 原地量化要确认后续不需要原 BF16 值 |
+| sparse index | `topk`、`where`、`cat`、`int` | window index + compressed index -> sparse index | `k`、sentinel `-1`、index dtype 要与 kernel 一致 |
+| attention kernel | `sparse_attn` | 读取 Q/KV/topk index 输出 attention | layout、padding head、index 越界和 graph capture 都会影响稳定性 |
 
-这条链路的输入是 hidden states 和 compressed KV cache，输出是 sparse attention 的 `o`。关键不是单个 `topk`，而是 `q/kv` layout、RoPE、量化、window index、compressed index 和 kernel 输入 dtype 共同组成接口。
+### 4.3 MoE：Router、Expert Dispatch 与 Combine
 
-| OP | 用法 | 注意事项 |
-|----|------|-------------|
-| `unflatten/view` | 把 projection 输出转成 `[batch, seq, heads, head_dim]` | stride 不兼容会触发 copy 或导致 kernel 输入错误 |
-| `rsqrt/square/mean` | Q 归一化 reference | 高频路径应尽量融合到 norm/attention kernel |
-| `act_quant(..., inplace=True)` | 对 KV 的非 RoPE 维做量化模拟/写回 | 原地写要确认后续不再需要原 BF16 值 |
-| `einsum/topk/where/cat/int` | 生成 fixed top-k sparse index | `topk` 的 k、index dtype、sentinel `-1` 都要和 sparse kernel 对齐 |
-| `sparse_attn` | 读取 Q、KV、topk index 计算输出 | 关注 head padding、contiguous、index 越界和 graph capture 支持 |
-
-### 4.3 MoE 与 HC/MHC：reference OP 链和热点实现边界
-
-源码位置：DeepSeek V4-Pro `inference/model.py`。
+MoE 模块先用 gate 产生 `weights` 和 `indices`，再按 expert id 分发 token。源码里的 reference 写法很适合观察 OP 语义：`topk/gather` 生成固定 top-k expert，`where/indexing` 找到属于某个 expert 的 token，`sum/+=` 完成 combine。
 
 ```python
 weights, indices = self.gate(x, input_ids.flatten())
@@ -371,23 +470,17 @@ for i in range(self.experts_start_idx, self.experts_end_idx):
 y += self.shared_experts(x)
 ```
 
-```python
-scores = linear(x.float(), self.weight.float())
-if self.score_func == "softmax":
-    scores = scores.softmax(dim=-1)
-elif self.score_func == "sigmoid":
-    scores = scores.sigmoid()
-else:
-    scores = F.softplus(scores).sqrt()
+| 阶段 | 关键 OP | 组织方式 | 注意事项 |
+|------|---------|----------|----------|
+| Router | `linear`、`softmax/sigmoid/softplus` | hidden -> expert score | score 函数和归一化要匹配模型配置 |
+| Top-k | `topk`、`gather` | expert score -> top-k id/weight | top-k shape 固定，便于后续 kernel 和 metadata |
+| 统计 | `bincount(...).tolist()` | 统计每个 expert token 数 | GPU tensor 回 CPU 会同步；适合 reference，不适合热点路径 |
+| Dispatch | `where`、advanced indexing | 按 expert id 选 token | 输出 token 数动态，会影响 Graph 和 workspace |
+| Combine | `+=`、broadcast、`sum` | expert output 按权重回写 token | 重复 index、dtype 和累加顺序会影响数值 |
 
-indices = scores.topk(self.topk, dim=-1)[1]
-weights = original_scores.gather(1, indices)
-weights /= weights.sum(dim=-1, keepdim=True)
-```
+### 4.4 HC/MHC：Reference OP 链如何表达数学语义
 
-MoE 的输入是 token hidden states，输出仍是 token hidden states。`topk/gather` 把 dense score 转成固定 top-k expert id 和 weight，`where/indexing` 把 token 送到 expert，`sum` 或加权加法完成 combine。上面的 reference 写法语义清晰，但 `bincount(...).tolist()` 会把结果带回 CPU，并用 Python loop 驱动 expert 计算，在线推理应由 fused MoE 或 grouped GEMM 承担。
-
-HC/MHC 也是类似模式：PyTorch OP 链表达数学语义，热点路径应由 fused/native kernel 承担。
+HC/MHC 模块使用 PyTorch 基础 OP 表达 reference 语义：先 flatten hidden，转成 float，做 RMS-like normalization，再用 `F.linear` 生成 mixing 参数，最后通过 broadcast 和 `sum` 合成输出。这条链路适合语义验证，也暴露出逐元素/归约 OP 串联的性能代价。
 
 ```python
 x = x.flatten(2).float()
@@ -399,81 +492,33 @@ pre, post, comb = hc_split_sinkhorn(
 y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=2)
 ```
 
-| 模块 | 关键 OP | 注意事项 |
-|------|---------|-------------|
-| Router | `linear`、`softmax/sigmoid/softplus`、`topk`、`gather` | dtype、top-k shape、权重归一化必须和模型配置一致 |
-| Expert dispatch | `bincount`、`.tolist()`、`where`、advanced indexing | reference 可读，但 CPU 回读和动态 token 数不适合 graph/replay 热点路径 |
-| Combine | broadcast、`sum`、加权加法、all-reduce | 权重 shape、重复 index、通信等待点要明确 |
-| HC/MHC | `flatten`、`square`、`mean`、`rsqrt`、`F.linear`、`sum` | 多个小 OP 会带来多次 launch 和 HBM 读写，热点路径通常需要融合实现 |
+| 阶段 | 关键 OP | 组织方式 | 注意事项 |
+|------|---------|----------|----------|
+| 展平 | `flatten`、`view` | 多维 hidden -> 线性输入 | `view` 需要 layout 兼容 |
+| 归一化 | `float`、`square`、`mean`、`rsqrt` | 计算 per-token scale | cast 和 reduction 维度要明确 |
+| mixing | `F.linear`、`mul` | hidden -> pre/post/comb 参数 | weight shape 和输出切分要匹配 |
+| 合成 | `unsqueeze`、broadcast、`sum` | mixing 参数和 hidden 合成输出 | 多个 broadcast/归约 OP 会产生中间读写 |
 
-### 4.4 SGLang Runtime：metadata、Graph replay 与固定 buffer
+### 4.5 权重转换与 Packed Layout
 
-源码位置：SGLang `deepseek_v4_backend.py`、`cuda_graph_runner.py`。
-
-```python
-def copy_(self, other):
-    self.req_pool_indices.copy_(other.req_pool_indices)
-    self.seq_lens.copy_(other.seq_lens)
-    self.out_cache_loc.copy_(other.out_cache_loc)
-```
+量化模型的运行时性能不只取决于 forward 里的 OP，也取决于加载阶段如何把 checkpoint 权重转换成运行时 layout。DeepSeek V4-Pro 的转换逻辑使用 `view(uint8)`、bit op、`stack`、`flatten`、`transpose` 等 OP 把 packed FP4 数据展开并重排。
 
 ```python
-seq_lens = forward_batch.seq_lens.to(torch.int32)
-seq_lens_cpu = forward_batch.seq_lens_cpu
-max_seq_len = int(seq_lens_cpu.max().item())
+x = x.view(torch.uint8)
+low = x & 0x0F
+high = (x >> 4) & 0x0F
+x = torch.stack([FP4_TABLE[low.long()], FP4_TABLE[high.long()]], dim=-1).flatten(2)
+x = x.view(bOut, fp8_block_size, bIn, fp8_block_size).transpose(1, 2)
 ```
 
-```python
-if bs != raw_bs:
-    self.seq_lens.fill_(seq_len_fill_value)
-    self.out_cache_loc.zero_()
+| 关键 OP | 组织方式 | 注意事项 |
+|---------|----------|----------|
+| `view(torch.uint8)` | 按字节解释 packed 数据 | 只改变解释方式，不等于数值转换 |
+| bit op | 拆 low/high nibble | 要明确 endian、pack 顺序和 table 映射 |
+| `stack/flatten` | 把两个半字节恢复成连续元素 | shape 变化必须和 block size 对齐 |
+| `transpose/view` | 转成运行时 GEMM 需要的 tile layout | stride 和 contiguous 影响加载后 kernel 输入 |
 
-with ctx:
-    self.graphs[graph_key].replay()
-```
-
-这组代码说明了在线推理和 reference 模型最大的区别：动态请求不能直接进入 Graph。CPU scheduler 先确定 batch、seq lens、KV slot 和 bucket；DEVICE侧固定 metadata buffer 通过 `copy_` 更新内容；padding 区域用 `fill_/zero_` 清理；Graph replay 读取固定地址、固定 shape 的输入。
-
-| OP | 输入输出 | 用法 | 风险 |
-|----|----------|------|------|
-| `copy_` | 新 metadata -> 固定 metadata tensor | replay 前只更新内容 | 替换 tensor 对象会破坏 capture 地址 |
-| `to(torch.int32)` | metadata dtype 转换 | 对齐 backend kernel 输入 | 反复隐式 cast 会增加开销或导致 kernel 不匹配 |
-| `.item()` | CPU侧元数据副本 -> Python 标量 | CPU scheduler 决策 | 如果作用在 GPU tensor，会形成 CPU-DEVICE 同步 |
-| `fill_/zero_` | padding buffer -> 清理后 buffer | 清掉 bucket padding 槽位 | 残留数据会影响 attention、cache 或 logits |
-| `graph.replay()` | 固定 graph 输入 -> 输出 | 降低 decode launch/Python 调度开销 | capture 内不能出现 dynamic shape、allocator、CPU sync 或 unsupported backend |
-
-### 4.5 SwiGLU 与 HC/MHC：激活、原地更新和 reference 链
-
-源码位置：SGLang `fused_moe.py`、DeepSeek V4 HC/MHC 相关实现。
-
-```python
-intermediate_cache1[:, :half].clamp_(max=swiglu_limit)
-intermediate_cache1[:, half:].clamp_(min=-swiglu_limit, max=swiglu_limit)
-
-swiglu_input = intermediate_cache1.view(-1, N)
-intermediate_cache2 = torch.nn.SwishGLU()(swiglu_input)
-```
-
-```python
-def hc_pre_torch_impl(x, hc_fn):
-    x_flat = x.flatten(1).float()
-    rsqrt = torch.rsqrt(x_flat.square().mean(-1, keepdim=True) + self.rms_norm_eps)
-    mixes = (F.linear(x_flat, hc_fn) * rsqrt).unsqueeze(1)
-    return x_flat, mixes
-```
-
-这两段代码展示了 PyTorch OP 在激活和 reference 计算中的典型用法。`clamp_` 是原地更新，会直接覆盖 `intermediate_cache1` 的 gate/up 分支；`view(-1, N)` 只是重新解释 layout，要求输入 stride 兼容；`torch.nn.SwishGLU()` 表达 SwiGLU 激活；HC/MHC reference 链路用 `flatten -> float -> square -> mean -> rsqrt -> F.linear` 表达归一化和线性混合。
-
-| 关注点 | 对应 OP | 注意事项 |
-|--------|---------|----------|
-| 原地裁剪 | `clamp_` | 会覆盖输入 tensor，后续不能再依赖裁剪前的 gate/up 值 |
-| 激活输入 layout | `view` | 只在 stride 兼容时零拷贝；不兼容时应显式处理 layout |
-| SwiGLU | `torch.nn.SwishGLU`、`silu`、`mul` | 语义等价于 gate 分支激活后与 up 分支相乘 |
-| HC/MHC reference | `flatten`、`float`、`square`、`mean`、`rsqrt`、`F.linear`、`sum` | 语义清楚，但多个逐元素/归约 OP 串联会增加 launch 和中间读写 |
-
-第 5 章的 MUSA 用例会把这些核心链路抽成可运行代码，验证 `copy_`、Graph replay、HC reference、SwiGLU clamp、KV indexing、MoE combine 和 sampling 边界的具体输入输出。
-
-## 5. MUSA 上的 OP 最小用例与验证输出
+## 5. MUSA 上的模块最小用例与验证输出
 
 | 场景 | 章节 | 关注的核心 OP |
 |------|------|--------------|
@@ -1135,63 +1180,17 @@ graph.replay()
 
 DSV4 metadata 的关键是 `copy_metadata`：tensor 字段用 `dst.copy_(src)` 更新，特殊 FlashMLA metadata 可 assign。这样既能表达动态请求，又不会替换 graph capture 绑定过的 tensor 对象地址。
 
-## 6. OP 注意事项汇总
+## 6. 回顾总结
 
-前面已经覆盖常见 PyTorch OP、LLM 经典结构、性能问题、DeepSeek V4/Pro 核心模块和 MUSA 最小用例。下面把注意事项汇总成一张表，方便按模块回看：哪些 OP 会改变 layout，哪些 OP 更新固定 buffer，哪些 API 会引入 CPU-DEVICE 同步，哪些 dynamic shape OP 不适合 graph replay，哪些路径需要关注 dtype、layout 和执行语义一致性。
+PyTorch 常见 OP 的分享重点不在 API 罗列，而在于把 OP 放回 Transformer 和 DeepSeek V4-Pro 的真实结构里看清楚它们的角色。
 
-### 6.1 按 LLM 模块看 OP
+1. **先看 OP 类型**：GPU OP 负责张量计算和 layout，CPU OP 负责调度与 metadata，Sync OP 改变执行时序，Dynamic Shape OP 带来 shape 不确定性，Graph OP 依赖固定地址和固定执行序列。
+2. **性能问题通常来自位置错误**：`contiguous()`、`.item()`、`masked_select`、`bincount(...).tolist()`、动态 `cat/split` 单独看都合理，但放进 decode 热点路径、Graph replay 内部或大 tensor 链路里，就可能成为瓶颈。
+3. **Transformer 是 OP 组合模板**：Embedding/Position、Attention/KV cache、RMSNorm/MLP、MoE、Logits/Sampling 都有稳定的 OP 组合方式。先看模块输入输出，再看每个 OP 是否改变 layout、分配内存、触发同步或制造动态 shape。
+4. **DeepSeek V4-Pro 放大了 OP 约束**：FP8/FP4 Linear 要同时看 activation scale、weight scale、packed layout 和 GEMM 路径；Compressed Attention 要同时看 Q/KV layout、top-k index 和 sparse kernel；MoE/HC/MHC 要区分 reference OP 链和热点执行路径。
+5. **MUSA 用例用于验证语义和边界**：最小例子展示了 `copy_`、Graph replay、KV indexing、MoE combine、sampling 回传等 OP 的输入输出。验证时不要只看能否运行，还要看输出 shape、dtype、device、数值和同步边界是否符合预期。
 
-| LLM 模块 | 重点 OP | 注意事项 | 处理建议 |
-|----------|---------|----------------|----------|
-| Attention / KV cache | `view`、`unsqueeze`、`contiguous`、`copy_`、indexing | Q/KV layout 是否满足 attention backend；`contiguous()` 是否引入真实 copy；KV 写入 index 是否越界或重复 | layout 变化要服务后端输入要求，不能靠隐式 copy 修正每步输入 |
-| Metadata / Graph | `copy_`、`to(torch.int32)`、slice、`pad`、`fill_`、`zero_`、`graph.replay()` | replay 前是否只更新固定 metadata 内容；padding 后 shape 是否匹配 capture bucket；replay 内是否出现 allocator、CPU sync 或新 tensor 替换 | 动态请求状态转换成固定 shape metadata，输入变化通过固定 buffer 内容更新表达 |
-| HC/MHC | `flatten`、`float`、`square`、`mean`、`rsqrt`、`F.linear`、`sum`、`contiguous` | PyTorch fallback 用多个基础 OP 表达语义；`contiguous()` 需要满足融合 kernel 输入要求 | fallback 保留用于语义验证，高频推理路径关注是否存在融合实现 |
-| MLP / MoE | `empty`、`view`、`chunk`、`topk`、`gather`、`clamp_`、`silu`、`SwishGLU`、`sum` | `empty` buffer 需要完整写入；top-k shape 要固定；`SwishGLU` 需要与 `silu(gate) * up` reference 数值对齐；dtype/layout 需要满足执行路径要求 | intermediate buffer、routing、activation 和 combine 都要关注写入完整性与输入输出约束 |
-| Sampling / logits | `topk`、`softmax`、`.cpu()`、`.tolist()` | top-k shape 是否固定；是否只回传最终 token、必要 logprob 或统计值；是否避免完整 logits 回 CPU | sampling 后处理保留必要结果回传，避免把大 tensor 带到 CPU侧 |
-
-### 6.2 高频 OP 的排查顺序
-
-排查高频 OP 时，先定位它所在的模块，再按下面顺序看：
-
-1. **执行设备**：该 OP 发生在 CPU侧调度、DEVICE侧张量计算、Graph replay 前准备，还是 replay 内部。
-2. **内存行为**：是否产生新 tensor、真实 copy、allocator 调用，是否改变 capture 绑定过的 tensor 对象。
-3. **shape 约束**：输出 shape 是否随数据变化，是否需要 padding/bucket 固定，是否会破坏 Graph replay。
-4. **同步边界**：是否触发 `.item/.tolist/.cpu`、`synchronize`、stream wait 或 collective wait。
-5. **执行路径**：是否走目标 custom kernel、库 kernel、编译 kernel 或 PyTorch fallback；fallback 是否只用于验证语义。
-
-这五项覆盖前面反复讨论的 `copy_`、`contiguous`、`pad`、`topk`、`.item()`、`SwishGLU` 和 HC/MHC fallback。它们对应的是 OP 的真实行为：在哪里执行、是否分配、shape 是否固定、是否同步、是否进入预期执行路径。
-
-### 6.3 设备后端与 OP 语义一致性
-
-针对 LLM 推理链路，PyTorch OP 的 API 名称只能说明语义，不能直接说明运行时代价。需要按四类边界理解 OP 的实际行为：
-
-1. **计算边界**：`linear/softmax/topk/SwishGLU/HC/MHC/cache store` 的输入输出、dtype、shape 和数值语义是否与目标实现一致。
-2. **内存布局边界**：stride、contiguous、storage offset、dtype 和 FP8 scale layout 是否满足 kernel 输入要求。
-3. **CPU-DEVICE 边界**：`.item/.tolist/.cpu/synchronize/work.wait` 是否只出现在 CPU侧元数据副本、必要结果回传、profiling 或调试边界。
-4. **Graph 边界**：capture/replay 内是否保持固定 shape、固定地址和固定执行序列，是否避免 dynamic shape OP、allocator、新 tensor 替换和不支持 capture 的调用。
-
-这四类边界的目的都是说明 PyTorch OP 在推理框架里的真实行为：语义是否正确、输入输出是否稳定、内存是否可复用、同步是否可控。
-
-## 7. 总结
-
-前面的 OP 分类、LLM 结构分析和 MUSA 用例共同说明：PyTorch OP 不能只按 API 名字理解，还要看输入输出、执行设备、shape、layout、同步边界和执行路径。同一个 OP 在示例代码中可以正确执行，但放到在线推理路径里，还要关注它是否产生额外 copy、是否触发 CPU 等待、是否破坏固定 shape，或者是否需要融合实现。
-
-第一，GPU OP 用于表达和组织张量计算，但它们不一定自动对应高性能实现。`view/reshape/contiguous/copy_/empty/topk/matmul` 等 OP 在 LLM 中经常用于 layout 变换、buffer 复用、路由排序和 fallback reference。分析时要同时看 shape、地址、dtype、layout 和执行路径。
-
-第二，CPU OP 和 Sync OP 会影响推理服务的时序和尾延迟。`.item/.tolist/.cpu/.numpy` 可以用于 scheduler、日志和必要 metadata 决策，但不能进入 decode 单步执行路径。`synchronize/event/stream wait/all_reduce` 的影响不仅是单次耗时增加，还会改变 CPU侧、DEVICE侧、通信和 graph replay 之间的并行执行关系。
-
-第三，Dynamic Shape OP 和 Graph OP 是高性能推理中约束相反的两类机制。`nonzero/unique/masked_select` 适合表达数据依赖输出，但会破坏固定 shape、固定地址和固定执行序列；CUDA/MUSA Graph 则要求 replay 前只更新既有 buffer 内容。工程上通常把动态性收敛到 CPU侧规划逻辑、bucket、padding、mask、page table 和固定大小 metadata。
-
-第四，DeepSeek V4/Pro 案例体现出“PyTorch OP 表达清晰语义，热点路径需要高效执行”的模式。metadata `copy_`、Graph runner、HC/MHC reference 和 MoE SwiGLU 都属于这类场景：PyTorch OP 用来说明输入输出、数学语义、内存写入和调试路径；性能分析再进一步关注 Graph capture/replay 兼容性、layout 约束和实际执行路径。
-
-总结为：**分享和分析 PyTorch OP 时，应把 API 用法放回具体场景：功能语义、输入输出、内存读写、对象生命周期、同步边界、Graph capture/replay 约束和执行路径，共同决定它在推理框架里的实际行为。**
-
-### 排查要点
-
-1. **Graph OP**：除了 API 语义，还要看是否改变 tensor 地址、产生动态 shape、触发 CPU 同步、走不支持 capture 的 backend。
-2. **性能瓶颈排查**：除大 GEMM 外，还要优先检查 copy 链路和未融合的逐元素/归约链路；每一条都可能带来 kernel launch 和 HBM 读写。
-3. **CPU-DEVICE 边界**：GPU tensor 上的 `.item/.tolist/.cpu` 会让 CPU 等待设备侧结果；规划逻辑使用 CPU侧元数据副本，replay 只碰固定 buffer。
-4. **执行路径验证**：对量化、Graph、JIT 和 custom kernel 路径，需要验证 dtype/layout、capture 兼容性、编译链路和 reference 语义是否一致。
+后续分析任意 PyTorch OP，可以按这条顺序走：先确认功能语义和输入输出，再确认 layout/dtype，再确认是否分配或同步，最后确认它在 Transformer/DeepSeek 模块里承担的是 reference、metadata 准备、Graph replay 前更新，还是热点张量计算。
 
 ## 附录 A. PyTorch 常见 OP 详细用例与 MUSA 输出
 
@@ -4150,9 +4149,9 @@ out = Tensor(shape=(2, 2), dtype=float32, device=musa:0, value=[[7.0, 7.0], [7.0
 
 该 `MUSAGraph.replay` 示例给出最小 capture/replay 用例；附录 A.3.2 Sync OP MUSA 环境用例给出 stream/event 与 graph replay 组合用例；§5.7 给出 SGLang DeepSeek V4 Graph 用法和普通 Graph / Piecewise / torch.compile 的深入比较（含 3 段 MUSA 用例）；§5.1 把 SGLang DeepSeek V4 的 buffer copy、metadata copy、graph replay、HC fallback 和 SwiGLU clamp 链路抽成 MUSA 最小用例。这些用例用于说明固定地址 replay 的基本模式。
 
-## 附录 B. 核心源码摘录与 OP 注释
+## 附录 B. DeepSeek V4-Pro 源码分析
 
-附录 B 只保留和 OP 用法直接相关的源码片段。主文关注 OP 分类、LLM 结构和性能问题；源码摘录用于核对具体实现如何使用这些 OP。
+附录 B 保留 DeepSeek V4-Pro 中和 OP 用法直接相关的源码片段。正文只展开核心链路，附录用于核对量化 Linear、Compressed Attention、MoE、HC/MHC 和权重转换如何组织 PyTorch OP。
 
 ### B.1 DeepSeek V4-Pro：FP8/FP4 Linear
 
@@ -4249,10 +4248,14 @@ OP 注释：
 | 模块 | OP | 说明 |
 |------|----|------|
 | MoE reference | `bincount(...).tolist()`、`where`、indexing | 语义清楚，但会引入 CPU 回读和 Python expert loop，不适合作为在线热点实现 |
-| HC/MHC | `flatten/square/mean/rsqrt/F.linear/sum` | reference 链路便于验证 fused/native kernel |
+| HC/MHC | `flatten/square/mean/rsqrt/F.linear/sum` | reference 链路便于验证融合实现 |
 | 权重转换 | `view(uint8)`、bit op、`stack/flatten/transpose` | 加载/转换阶段决定运行时 packed layout 和 scale layout |
 
-### B.4 SGLang DeepSeek V4：Attention Prepare
+## 附录 C. DeepSeek V4 在 SGLang 中的源码分析
+
+附录 C 保留 SGLang DeepSeek V4 中和 OP 使用直接相关的源码片段，重点看 attention prepare、metadata copy、Graph runner、HC/MHC reference 和 MoE SwiGLU 链路。
+
+### C.1 SGLang DeepSeek V4：Attention Prepare
 
 源码位置：`python/sglang/srt/models/deepseek_v4.py`。
 
@@ -4283,7 +4286,7 @@ OP 注释：
 | `unsqueeze` | 给 KV RoPE 维补 head 维 | 只改变 view，不复制数据 |
 | `copy_` | 写入预分配 q_out | Graph/multi-stream 场景中保持固定对象地址 |
 
-### B.5 SGLang DeepSeek V4：Metadata 与 Graph Runner
+### C.2 SGLang DeepSeek V4：Metadata 与 Graph Runner
 
 源码位置：`python/sglang/srt/layers/attention/deepseek_v4_backend.py`、`python/sglang/srt/model_executor/cuda_graph_runner.py`。
 
@@ -4319,7 +4322,7 @@ OP 注释：
 | `fill_/zero_` | 清理 padding 槽位 | 防止上一轮 batch 残留 |
 | `graph.replay()` | 重放固定执行路径 | capture 内不能有动态 shape、CPU sync 或 unsupported backend |
 
-### B.6 SGLang DeepSeek V4：HC/MHC 与 MoE SwiGLU
+### C.3 SGLang DeepSeek V4：HC/MHC 与 MoE SwiGLU
 
 源码位置：`python/sglang/srt/models/deepseek_v4.py`、`python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py`。
 
