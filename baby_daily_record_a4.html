@@ -6,7 +6,7 @@
   <style>
     @page {
       size: A4;
-      margin: 9mm;
+      margin: 10mm;
     }
 
     * {
@@ -23,8 +23,11 @@
     }
 
     .page {
-      width: 192mm;
+      width: 190mm;
+      min-height: 277mm;
       margin: 0 auto;
+      display: flex;
+      flex-direction: column;
     }
 
     .header {
@@ -32,7 +35,7 @@
       grid-template-columns: 1fr auto;
       align-items: end;
       gap: 12px;
-      padding-bottom: 7px;
+      padding-bottom: 6px;
       border-bottom: 2px solid #222;
     }
 
@@ -49,33 +52,13 @@
       white-space: nowrap;
     }
 
-    .tips {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 6px;
-      margin: 7px 0;
-    }
-
-    .tip {
-      padding: 5px 7px;
-      border: 1px solid #c8c8c8;
-      background: #f7f7f7;
-      border-radius: 6px;
-      font-size: 12px;
-    }
-
-    .tip b {
-      display: block;
-      margin-bottom: 2px;
-      font-size: 13px;
-    }
-
     .section {
-      margin-top: 7px;
+      margin-top: 6px;
       border: 1.5px solid #222;
       border-radius: 7px;
       overflow: hidden;
       break-inside: avoid;
+      page-break-inside: avoid;
     }
 
     .section-title {
@@ -177,21 +160,16 @@
       white-space: nowrap;
     }
 
-    .bottom-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 7px;
-      margin-top: 7px;
-    }
-
-    .note-card {
+    .extra-box {
+      flex: 1;
+      min-height: 32mm;
+      margin-top: 6px;
       border: 1.5px solid #222;
       border-radius: 7px;
       overflow: hidden;
-      min-height: 64px;
     }
 
-    .note-title {
+    .extra-title {
       padding: 5px 9px;
       background: #ededed;
       border-bottom: 1px solid #222;
@@ -199,13 +177,16 @@
       font-size: 15px;
     }
 
-    .note-body {
-      padding: 7px 8px;
-    }
-
-    .note-line {
-      height: 21px;
-      border-bottom: 1px solid #111;
+    .extra-body {
+      height: calc(100% - 30px);
+      padding: 8px;
+      background:
+        repeating-linear-gradient(
+          to bottom,
+          transparent 0,
+          transparent 20px,
+          #d7d7d7 21px
+        );
     }
 
     @media print {
@@ -215,7 +196,8 @@
       }
 
       .page {
-        width: auto;
+        width: 190mm;
+        min-height: 277mm;
       }
     }
   </style>
@@ -226,13 +208,6 @@
       <h1>宝宝每日记录卡</h1>
       <div class="date">日期：____月____日</div>
     </div>
-
-    <section class="tips">
-      <div class="tip"><b>睡觉</b>写睡着和醒来时间</div>
-      <div class="tip"><b>吃奶</b>写时间和 ml 数</div>
-      <div class="tip"><b>辅食</b>写食物和吃得多少</div>
-      <div class="tip"><b>尿布/外出</b>只记实际发生的事</div>
-    </section>
 
     <section class="section">
       <div class="section-title">睡觉记录 <span>不分上午下午，按第几次写</span></div>
@@ -367,6 +342,36 @@
           <div class="checks">□ 尿　□ 便</div>
           <div class="line"></div>
         </div>
+        <div class="row diaper-row">
+          <div>时间 ____:____</div>
+          <div class="checks">□ 尿　□ 便</div>
+          <div class="line"></div>
+        </div>
+        <div class="row diaper-row">
+          <div>时间 ____:____</div>
+          <div class="checks">□ 尿　□ 便</div>
+          <div class="line"></div>
+        </div>
+        <div class="row diaper-row">
+          <div>时间 ____:____</div>
+          <div class="checks">□ 尿　□ 便</div>
+          <div class="line"></div>
+        </div>
+        <div class="row diaper-row">
+          <div>时间 ____:____</div>
+          <div class="checks">□ 尿　□ 便</div>
+          <div class="line"></div>
+        </div>
+        <div class="row diaper-row">
+          <div>时间 ____:____</div>
+          <div class="checks">□ 尿　□ 便</div>
+          <div class="line"></div>
+        </div>
+        <div class="row diaper-row">
+          <div>时间 ____:____</div>
+          <div class="checks">□ 尿　□ 便</div>
+          <div class="line"></div>
+        </div>
       </div>
     </section>
 
@@ -386,21 +391,9 @@
       </div>
     </section>
 
-    <section class="bottom-grid">
-      <div class="note-card">
-        <div class="note-title">今天主要吃了什么</div>
-        <div class="note-body">
-          <div class="note-line"></div>
-          <div class="note-line"></div>
-        </div>
-      </div>
-      <div class="note-card">
-        <div class="note-title">需要特别说的事</div>
-        <div class="note-body">
-          <div class="note-line"></div>
-          <div class="note-line"></div>
-        </div>
-      </div>
+    <section class="extra-box">
+      <div class="extra-title">补充记录</div>
+      <div class="extra-body"></div>
     </section>
   </main>
 </body>
