@@ -4149,18 +4149,30 @@ out = Tensor(shape=(2, 2), dtype=float32, device=musa:0, value=[[7.0, 7.0], [7.0
 
 该 `MUSAGraph.replay` 示例给出最小 capture/replay 用例；附录 A.3.2 Sync OP MUSA 环境用例给出 stream/event 与 graph replay 组合用例；§5.7 给出 SGLang DeepSeek V4 Graph 用法和普通 Graph / Piecewise / torch.compile 的深入比较（含 3 段 MUSA 用例）；§5.1 把 SGLang DeepSeek V4 的 buffer copy、metadata copy、graph replay、HC fallback 和 SwiGLU clamp 链路抽成 MUSA 最小用例。这些用例用于说明固定地址 replay 的基本模式。
 
-## 附录 B. DeepSeek V4-Pro 源码分析
+## 附录 B. DeepSeek V4-Pro 源码逐行分析
 
-附录 B 保留 DeepSeek V4-Pro 中和 OP 用法直接相关的源码片段。正文只展开核心链路，附录用于核对量化 Linear、Compressed Attention、MoE、HC/MHC 和权重转换如何组织 PyTorch OP。
+附录 B 使用 DeepSeek V4-Pro `inference/` 下的核心函数。每段源码都保留必要上下文，并用编号行说明 PyTorch OP 如何组织输入、layout、dtype、metadata 和热点计算。
 
-### B.1 DeepSeek V4-Pro：FP8/FP4 Linear
+### B.1 Embedding、Linear 分派与量化权重布局
 
-源码位置：`inference/model.py`、`inference/kernel.py`。
+源码位置：`inference/model.py`。
 
 ```python
+# [B1-01]
+def forward(self, x: torch.Tensor) -> torch.Tensor:
+    if world_size > 1:
+        mask = (x < self.vocab_start_idx) | (x >= self.vocab_end_idx)
+        x = x - self.vocab_start_idx
+        x[mask] = 0
+    y = F.embedding(x, self.weight)
+    if world_size > 1:
+        y[mask] = 0
+        dist.all_reduce(y)
+    return y
+
+# [B1-02]
 def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] = None) -> torch.Tensor:
     assert bias is None
-
     if weight.dtype == torch.float4_e2m1fn_x2:
         x, s = act_quant(x, block_size, scale_fmt, scale_dtype)
         return fp4_gemm(x, s, weight, weight.scale, scale_dtype)
@@ -4169,101 +4181,507 @@ def linear(x: torch.Tensor, weight: torch.Tensor, bias: Optional[torch.Tensor] =
         return fp8_gemm(x, s, weight, weight.scale, scale_dtype)
     else:
         return F.linear(x, weight)
+
+# [B1-03]
+if dtype == torch.float4_e2m1fn_x2:
+    self.weight = nn.Parameter(torch.empty(out_features, in_features // 2, dtype=torch.float4_e2m1fn_x2))
+    scale_out_features = out_features
+    scale_in_features = in_features // fp4_block_size
+    self.weight.scale = self.scale = nn.Parameter(torch.empty(scale_out_features, scale_in_features, dtype=torch.float8_e8m0fnu))
+elif dtype == torch.float8_e4m3fn:
+    self.weight = nn.Parameter(torch.empty(out_features, in_features, dtype=dtype))
+    scale_out_features = (out_features + block_size - 1) // block_size
+    scale_in_features = (in_features + block_size - 1) // block_size
+    self.weight.scale = self.scale = nn.Parameter(torch.empty(scale_out_features, scale_in_features, dtype=torch.float8_e8m0fnu))
+else:
+    self.weight = nn.Parameter(torch.empty(out_features, in_features, dtype=dtype))
+    self.register_parameter("scale", None)
 ```
 
-OP 注释：
+逐行分析：
 
-| OP | 作用 | 注意事项 |
-|----|------|----------|
-| `act_quant` | activation 量化并生成 scale | block size、scale dtype 和 contiguous layout 必须匹配后端 GEMM |
-| `fp4_gemm/fp8_gemm` | 承担量化 GEMM 热点计算 | packed weight 和 scale layout 是接口约束 |
-| `F.linear` | 普通 dtype fallback/reference | 语义清晰，但量化推理热点路径通常不应落到这里 |
+| 编号 | 源码动作 | 涉及 OP | 说明与注意事项 |
+|------|----------|---------|----------------|
+| B1-01.1 | `mask = ...` | 比较、逻辑或 | TP 场景下判断 token 是否属于当前 vocab shard，输出 bool mask。 |
+| B1-01.2 | `x = x - vocab_start_idx` | 减法 | 把全局 token id 转为本 shard 内局部 id。 |
+| B1-01.3 | `x[mask] = 0` | boolean indexing 原地写 | 非本 shard token 临时置 0，避免 embedding 越界。 |
+| B1-01.4 | `F.embedding` | embedding lookup | 输入 token id，输出 `[tokens, dim]`；id dtype/device 必须与查表路径匹配。 |
+| B1-01.5 | `y[mask] = 0` | boolean indexing 原地写 | 把非本 shard 的 embedding 结果清零，准备跨 rank 汇总。 |
+| B1-01.6 | `dist.all_reduce(y)` | 分布式同步 OP | 各 rank embedding 结果相加，通信等待点会影响并行时序。 |
+| B1-02.1 | `assert bias is None` | Python 断言 | 当前 Linear 路径不处理 bias，避免量化 GEMM 接口混入额外分支。 |
+| B1-02.2 | `weight.dtype == torch.float4_e2m1fn_x2` | dtype 分支 | dtype 决定后续 OP 路径，FP4 不走普通 `F.linear`。 |
+| B1-02.3 | `act_quant(...)` | activation quant | 输入 activation 被分块量化，并生成 scale tensor。 |
+| B1-02.4 | `fp4_gemm/fp8_gemm` | 量化 GEMM | 输入包括量化 activation、activation scale、weight、weight scale。 |
+| B1-02.5 | `F.linear` | dense linear | 普通 dtype 的 reference 路径，语义清晰但不表达 FP4/FP8 scale 约束。 |
+| B1-03.1 | `torch.empty(out, in // 2, dtype=FP4)` | 创建未初始化 tensor | FP4 两个值打包到一个存储单元，逻辑 K 维是 `in_features`。 |
+| B1-03.2 | `scale_in_features = in_features // fp4_block_size` | Python shape 计算 | FP4 scale 沿 K 维按 block 管理，shape 必须和 GEMM kernel 一致。 |
+| B1-03.3 | `torch.empty(..., dtype=torch.float8_e8m0fnu)` | 创建 scale 参数 | scale 本身也是低精度格式，后续计算要按该 dtype 解释。 |
+| B1-03.4 | FP8 分支 scale shape | 创建 weight/scale | FP8 weight 不打包 K/2，但 scale 使用 block 上取整。 |
+| B1-03.5 | 普通 dtype 分支 | `torch.empty`、`register_parameter` | 普通 Linear 没有 scale 参数，forward 会落到 `F.linear`。 |
 
-### B.2 DeepSeek V4-Pro：Compressed Attention
+### B.2 `act_quant`、`fp8_gemm` 与 `fp4_gemm`
 
-源码位置：`inference/model.py`、`inference/kernel.py`。
+源码位置：`inference/kernel.py`。
 
 ```python
-q = self.wq_b(qr)
-q = q.unflatten(-1, (self.n_local_heads, self.head_dim))
-apply_rotary_emb(q[..., -rd:], freqs_cis)
-q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps)
+# [B2-01]
+def act_quant(x, block_size=128, scale_fmt=None, scale_dtype=torch.float32, inplace=False):
+    N = x.size(-1)
+    assert N % block_size == 0
+    tl_dtype = FE8M0 if scale_dtype == torch.float8_e8m0fnu else FP32
+    z = x.contiguous()
+    y = torch.empty_like(z) if inplace else torch.empty_like(z, dtype=torch.float8_e4m3fn)
+    s = z.new_empty(*z.size()[:-1], N // block_size, dtype=scale_dtype)
+    kernel = act_quant_kernel(N, block_size, scale_dtype=tl_dtype, round_scale=scale_fmt is not None, inplace=inplace)
+    kernel(z.view(-1, N), y.view(-1, N), s.view(-1, N // block_size))
+    if inplace:
+        x.copy_(y)
+        return x
+    return y, s
 
-kv = self.wkv(x)
-kv = self.kv_norm(kv)
-apply_rotary_emb(kv[..., -rd:], freqs_cis)
-act_quant(kv[..., :-rd], 64, scale_fmt, scale_dtype, True)
+# [B2-02]
+def fp8_gemm(a, a_s, b, b_s, scale_dtype=torch.float32):
+    assert a.is_contiguous() and b.is_contiguous()
+    assert a_s.is_contiguous() and b_s.is_contiguous()
+    tl_dtype = FE8M0 if scale_dtype == torch.float8_e8m0fnu else FP32
+    K = a.size(-1)
+    M = a.numel() // K
+    N = b.size(0)
+    c = a.new_empty(*a.size()[:-1], N, dtype=torch.get_default_dtype())
+    kernel = fp8_gemm_kernel(N, K, scale_dtype=tl_dtype)
+    kernel(a.view(M, K), b, c.view(M, N), a_s.view(M, -1), b_s)
+    return c
 
-topk_idxs = get_window_topk_idxs(win, bsz, seqlen, start_pos)
-if self.compress_ratio:
-    compress_topk_idxs = self.indexer(x, qr, start_pos, offset)
-    topk_idxs = torch.cat([topk_idxs, compress_topk_idxs], dim=-1)
-topk_idxs = topk_idxs.int()
-o = sparse_attn(q, kv, self.attn_sink, topk_idxs, self.softmax_scale)
+# [B2-03]
+def fp4_gemm(a, a_s, b, b_s, scale_dtype=torch.float32):
+    assert a.is_contiguous() and b.is_contiguous()
+    assert a_s.is_contiguous() and b_s.is_contiguous()
+    tl_dtype = FE8M0 if scale_dtype == torch.float8_e8m0fnu else FP32
+    K = a.size(-1)
+    M = a.numel() // K
+    N = b.size(0)
+    c = a.new_empty(*a.size()[:-1], N, dtype=torch.get_default_dtype())
+    kernel = fp4_gemm_kernel(N, K, scale_dtype=tl_dtype)
+    kernel(a.view(M, K), b, c.view(M, N), a_s.view(M, -1), b_s)
+    return c
 ```
 
-OP 注释：
+逐行分析：
 
-| OP | 作用 | 注意事项 |
-|----|------|----------|
-| `unflatten/view` | 把 projection 输出整理成 head layout | stride 不兼容时要显式处理 copy |
-| `rsqrt/square/mean` | Q 归一化 reference | 高频路径通常由 fused norm 或 attention kernel 吸收 |
-| `topk/cat/int` | 构造固定 sparse/compressed index | top-k 数量和 index dtype 要与 backend 一致 |
-| `sparse_attn` | 稀疏 attention kernel wrapper | 输入 layout、padding head、topk index 都是 kernel 接口的一部分 |
+| 编号 | 源码动作 | 涉及 OP | 说明与注意事项 |
+|------|----------|---------|----------------|
+| B2-01.1 | `N = x.size(-1)` | shape 读取 | 量化沿最后一维分块，最后一维通常是 hidden 或 GEMM K。 |
+| B2-01.2 | `assert N % block_size == 0` | Python 断言 | block quant 要求 K 维可整除，否则 scale shape 无法对齐。 |
+| B2-01.3 | `x.contiguous()` | layout copy 可能发生 | kernel 需要连续输入；如果上游非连续，会产生真实 copy。 |
+| B2-01.4 | `torch.empty_like` | 创建输出 | `inplace=False` 创建 FP8 输出；`inplace=True` 创建同 dtype 临时输出。 |
+| B2-01.5 | `z.new_empty(..., dtype=scale_dtype)` | 创建 scale | scale shape 是 `原 shape 去掉最后一维 + N/block_size`。 |
+| B2-01.6 | `kernel(...)` | custom kernel 调用 | `view(-1, N)` 把任意前缀维折叠成 GEMM-like M 维。 |
+| B2-01.7 | `x.copy_(y)` | 原地写回 | inplace 模式把量化/反量化结果写回原 tensor，后续不能再依赖原值。 |
+| B2-02.1 | `is_contiguous()` | layout 检查 | GEMM wrapper 明确拒绝非连续输入和 scale。 |
+| B2-02.2 | `K/M/N` | shape 推导 | `a` 逻辑 shape 折叠成 `[M,K]`，`b` 逻辑 shape 是 `[N,K]`。 |
+| B2-02.3 | `a.new_empty(..., N)` | 创建输出 | 输出前缀维继承 activation 前缀维，最后一维变成 out features。 |
+| B2-02.4 | `a.view(M,K)` / `c.view(M,N)` | view | kernel 接口使用二维矩阵，要求上游连续性已满足。 |
+| B2-03.1 | FP4 GEMM 与 FP8 GEMM 同形 | view/new_empty/custom kernel | activation 仍按 FP8 输入；weight 是 packed FP4，scale 是 per-32 weight scale。 |
+| B2-03.2 | `b.size(0)` | shape 读取 | packed FP4 的 K 维存储为 `K//2`，但 N 维仍是 out features。 |
 
-### B.3 DeepSeek V4-Pro：MoE、HC/MHC 与权重转换
+### B.3 RoPE、Window Top-k 与 Compressed Top-k
 
-源码位置：`inference/model.py`、`inference/convert.py`。
+源码位置：`inference/model.py`。
 
 ```python
-weights, indices = self.gate(x, input_ids.flatten())
-y = torch.zeros_like(x, dtype=torch.float32)
-counts = torch.bincount(indices.flatten(), minlength=self.n_routed_experts).tolist()
-for i in range(self.experts_start_idx, self.experts_end_idx):
-    if counts[i] == 0:
-        continue
-    idx, top = torch.where(indices == i)
-    y[idx] += self.experts[i](x[idx], weights[idx, top, None])
-y += self.shared_experts(x)
+# [B3-01]
+def apply_rotary_emb(x: torch.Tensor, freqs_cis: torch.Tensor, inverse: bool = False) -> torch.Tensor:
+    y = x
+    x = torch.view_as_complex(x.float().unflatten(-1, (-1, 2)))
+    if inverse:
+        freqs_cis = freqs_cis.conj()
+    if x.ndim == 3:
+        freqs_cis = freqs_cis.view(1, x.size(1), x.size(-1))
+    else:
+        freqs_cis = freqs_cis.view(1, x.size(1), 1, x.size(-1))
+    x = torch.view_as_real(x * freqs_cis).flatten(-2)
+    y.copy_(x)
+    return y
+
+# [B3-02]
+def get_window_topk_idxs(window_size: int, bsz: int, seqlen: int, start_pos: int):
+    if start_pos >= window_size - 1:
+        start_pos %= window_size
+        matrix = torch.cat([torch.arange(start_pos + 1, window_size), torch.arange(0, start_pos + 1)], dim=0)
+    elif start_pos > 0:
+        matrix = F.pad(torch.arange(start_pos + 1), (0, window_size - start_pos - 1), value=-1)
+    else:
+        base = torch.arange(seqlen).unsqueeze(1)
+        matrix = (base - window_size + 1).clamp(0) + torch.arange(min(seqlen, window_size))
+        matrix = torch.where(matrix > base, -1, matrix)
+    return matrix.unsqueeze(0).expand(bsz, -1, -1)
 ```
+
+逐行分析：
+
+| 编号 | 源码动作 | 涉及 OP | 说明与注意事项 |
+|------|----------|---------|----------------|
+| B3-01.1 | `y = x` | 引用保存 | RoPE 最终通过 `copy_` 写回原 slice，属于原地更新。 |
+| B3-01.2 | `x.float()` | dtype 转换 | RoPE 计算转 float，提升复数乘法精度。 |
+| B3-01.3 | `unflatten(-1, (-1, 2))` | shape 变换 | 把最后一维两两配对，为 complex view 做准备。 |
+| B3-01.4 | `view_as_complex` | view/解释 dtype | 要求最后一维长度为 2 且 stride 合法。 |
+| B3-01.5 | `freqs_cis.conj()` | 复数共轭 | inverse RoPE 用共轭实现反向旋转。 |
+| B3-01.6 | `freqs_cis.view(...)` | shape 对齐 | 根据 Q/K 的维度补 batch/head 维，服务 broadcast。 |
+| B3-01.7 | `x * freqs_cis` | broadcast 乘法 | 对 RoPE 维做复数旋转。 |
+| B3-01.8 | `view_as_real(...).flatten(-2)` | complex -> real | 把复数结果还原成普通 real tensor。 |
+| B3-01.9 | `y.copy_(x)` | 原地写回 | 保持外部 tensor 对象不变，只更新 RoPE 维内容。 |
+| B3-02.1 | `torch.arange` | 序列生成 | 构造 sliding window 可见 token index。 |
+| B3-02.2 | `torch.cat` | 拼接 | decode 环形窗口时把尾部和头部拼接成窗口 index。 |
+| B3-02.3 | `F.pad(..., value=-1)` | padding | 用 `-1` 表达无效 index，后续 sparse attention 需要识别 sentinel。 |
+| B3-02.4 | `unsqueeze(1)` | 增加维度 | prefill 时生成 `[seqlen, window]` 的 base 矩阵。 |
+| B3-02.5 | `clamp`、`where` | 边界修正 | 防止 index 超过当前 token 位置，把未来位置置为 `-1`。 |
+| B3-02.6 | `unsqueeze(0).expand(...)` | broadcast view | 生成 batch 维，不复制每个 batch 的 index 内容；不应对 expanded view 原地写。 |
+
+### B.4 Attention Forward：Q/KV、Sparse Index、Cache 与 Output Projection
+
+源码位置：`inference/model.py`。
 
 ```python
-x = x.flatten(2).float()
-rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
-mixes = F.linear(x, hc_fn) * rsqrt
-pre, post, comb = hc_split_sinkhorn(...)
-y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=2)
+# [B4-01]
+def forward(self, x: torch.Tensor, start_pos: int):
+    bsz, seqlen, _ = x.size()
+    freqs_cis = self.freqs_cis[start_pos:start_pos+seqlen]
+    win = self.window_size
+    ratio = self.compress_ratio
+    rd = self.rope_head_dim
+
+    qr = q = self.q_norm(self.wq_a(x))
+    q = self.wq_b(q).unflatten(-1, (self.n_local_heads, self.head_dim))
+    q *= torch.rsqrt(q.square().mean(-1, keepdim=True) + self.eps)
+    apply_rotary_emb(q[..., -rd:], freqs_cis)
+
+    kv = self.wkv(x)
+    kv = self.kv_norm(kv)
+    apply_rotary_emb(kv[..., -rd:], freqs_cis)
+    act_quant(kv[..., :-rd], 64, scale_fmt, scale_dtype, True)
+    topk_idxs = get_window_topk_idxs(win, bsz, seqlen, start_pos)
+    if self.compress_ratio:
+        offset = kv.size(1) if start_pos == 0 else win
+        if self.indexer is not None:
+            compress_topk_idxs = self.indexer(x, qr, start_pos, offset)
+        else:
+            compress_topk_idxs = get_compress_topk_idxs(ratio, bsz, seqlen, start_pos, offset)
+        topk_idxs = torch.cat([topk_idxs, compress_topk_idxs], dim=-1)
+    topk_idxs = topk_idxs.int()
+
+    if start_pos == 0:
+        if seqlen <= win:
+            self.kv_cache[:bsz, :seqlen] = kv
+        else:
+            cutoff = seqlen % win
+            self.kv_cache[:bsz, cutoff: win], self.kv_cache[:bsz, :cutoff] = kv[:, -win:].split([win - cutoff, cutoff], dim=1)
+        if self.compress_ratio:
+            if (kv_compress := self.compressor(x, start_pos)) is not None:
+                kv = torch.cat([kv, kv_compress], dim=1)
+        o = sparse_attn(q, kv, self.attn_sink, topk_idxs, self.softmax_scale)
+    else:
+        self.kv_cache[:bsz, start_pos % win] = kv.squeeze(1)
+        if self.compress_ratio:
+            self.compressor(x, start_pos)
+        o = sparse_attn(q, self.kv_cache[:bsz], self.attn_sink, topk_idxs, self.softmax_scale)
+    apply_rotary_emb(o[..., -rd:], freqs_cis, True)
+
+    o = o.view(bsz, seqlen, self.n_local_groups, -1)
+    wo_a = self.wo_a.weight.view(self.n_local_groups, self.o_lora_rank, -1)
+    o = torch.einsum("bsgd,grd->bsgr", o, wo_a)
+    x = self.wo_b(o.flatten(2))
+    return x
 ```
+
+逐行分析：
+
+| 编号 | 源码动作 | 涉及 OP | 说明与注意事项 |
+|------|----------|---------|----------------|
+| B4-01.1 | `x.size()` | shape 读取 | `bsz/seqlen` 决定后续 cache、topk index 和 output shape。 |
+| B4-01.2 | `freqs_cis[start_pos:start_pos+seqlen]` | slice | 取本次 token 对应 RoPE 频率。 |
+| B4-01.3 | `self.wq_a(x)`、`q_norm` | Linear + norm | 先低秩 Q 投影，再归一化。 |
+| B4-01.4 | `self.wq_b(q).unflatten(...)` | Linear + layout | Q 投影输出整理成 `[bsz,seqlen,heads,head_dim]`。 |
+| B4-01.5 | `square().mean().rsqrt()` | 归一化 OP 链 | 对 Q 做 RMS-like 缩放，多个小 OP 可表达 reference。 |
+| B4-01.6 | `apply_rotary_emb(q[..., -rd:])` | slice + 原地 RoPE | 只对 RoPE 维旋转，并通过 `copy_` 写回 slice。 |
+| B4-01.7 | `self.wkv(x)`、`kv_norm` | Linear + norm | KV 走单独低维路径，输出 `head_dim`。 |
+| B4-01.8 | `act_quant(kv[..., :-rd], ..., True)` | slice + inplace quant | 非 RoPE 维原地量化模拟，RoPE 维保持较高精度。 |
+| B4-01.9 | `get_window_topk_idxs` | arange/pad/where/expand | 构造 sliding window index。 |
+| B4-01.10 | `self.indexer(...)` 或 `get_compress_topk_idxs` | top-k/index 生成 | compressed attention 的额外 sparse index。 |
+| B4-01.11 | `torch.cat` | 拼接 | window index 和 compressed index 合并到最后一维。 |
+| B4-01.12 | `topk_idxs.int()` | dtype 转换 | attention kernel 使用 int32 index，避免隐式 cast。 |
+| B4-01.13 | `self.kv_cache[:bsz, :seqlen] = kv` | slice 原地写 | prefill 短序列直接写入窗口 cache。 |
+| B4-01.14 | `split([...], dim=1)` | 切分 | 长序列进入环形窗口，需要按 cutoff 拆分写入。 |
+| B4-01.15 | `torch.cat([kv, kv_compress])` | 拼接 | prefill 时把原始 KV 和压缩 KV 合并给 sparse attention。 |
+| B4-01.16 | `kv.squeeze(1)` | shape 变换 | decode 单 token 写 cache，去掉 seq 维。 |
+| B4-01.17 | `sparse_attn(...)` | custom attention | 读取 Q、KV、attn sink、topk index，输出 attention 结果。 |
+| B4-01.18 | `apply_rotary_emb(o[..., -rd:], ..., True)` | inverse RoPE | 对输出 RoPE 维做反旋转。 |
+| B4-01.19 | `o.view(...)` | layout | 按 group 整理输出，准备低秩 O projection。 |
+| B4-01.20 | `wo_a.weight.view(...)` | weight layout | 把 O projection weight 整理成 group/rank 维。 |
+| B4-01.21 | `torch.einsum` | batched contraction | 做 group-wise low-rank projection。 |
+| B4-01.22 | `o.flatten(2)`、`self.wo_b` | flatten + Linear | 合并 group/rank 维后投回 hidden dim。 |
+
+### B.5 Gate、Expert 与 MoE Forward
+
+源码位置：`inference/model.py`。
 
 ```python
-x = x.view(torch.uint8)
-low = x & 0x0F
-high = (x >> 4) & 0x0F
-x = torch.stack([FP4_TABLE[low.long()], FP4_TABLE[high.long()]], dim=-1).flatten(2)
-x = x.view(bOut, fp8_block_size, bIn, fp8_block_size).transpose(1, 2)
+# [B5-01]
+def forward(self, x: torch.Tensor, input_ids: Optional[torch.Tensor] = None):
+    scores = linear(x.float(), self.weight.float())
+    if self.score_func == "softmax":
+        scores = scores.softmax(dim=-1)
+    elif self.score_func == "sigmoid":
+        scores = scores.sigmoid()
+    else:
+        scores = F.softplus(scores).sqrt()
+    original_scores = scores
+    if self.bias is not None:
+        scores = scores + self.bias
+    if self.hash:
+        indices = self.tid2eid[input_ids]
+    else:
+        indices = scores.topk(self.topk, dim=-1)[1]
+    weights = original_scores.gather(1, indices)
+    if self.score_func != "softmax":
+        weights /= weights.sum(dim=-1, keepdim=True)
+    weights *= self.route_scale
+    return weights, indices
+
+# [B5-02]
+def forward(self, x: torch.Tensor, weights: Optional[torch.Tensor] = None):
+    dtype = x.dtype
+    gate = self.w1(x).float()
+    up = self.w3(x).float()
+    if self.swiglu_limit > 0:
+        up = torch.clamp(up, min=-self.swiglu_limit, max=self.swiglu_limit)
+        gate = torch.clamp(gate, max=self.swiglu_limit)
+    x = F.silu(gate) * up
+    if weights is not None:
+        x = weights * x
+    return self.w2(x.to(dtype))
+
+# [B5-03]
+def forward(self, x: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
+    shape = x.size()
+    x = x.view(-1, self.dim)
+    weights, indices = self.gate(x, input_ids.flatten())
+    y = torch.zeros_like(x, dtype=torch.float32)
+    counts = torch.bincount(indices.flatten(), minlength=self.n_routed_experts).tolist()
+    for i in range(self.experts_start_idx, self.experts_end_idx):
+        if counts[i] == 0:
+            continue
+        expert = self.experts[i]
+        idx, top = torch.where(indices == i)
+        y[idx] += expert(x[idx], weights[idx, top, None])
+    if world_size > 1:
+        dist.all_reduce(y)
+    y += self.shared_experts(x)
+    return y.type_as(x).view(shape)
 ```
 
-OP 注释：
+逐行分析：
 
-| 模块 | OP | 说明 |
-|------|----|------|
-| MoE reference | `bincount(...).tolist()`、`where`、indexing | 语义清楚，但会引入 CPU 回读和 Python expert loop，不适合作为在线热点实现 |
-| HC/MHC | `flatten/square/mean/rsqrt/F.linear/sum` | reference 链路便于验证融合实现 |
-| 权重转换 | `view(uint8)`、bit op、`stack/flatten/transpose` | 加载/转换阶段决定运行时 packed layout 和 scale layout |
+| 编号 | 源码动作 | 涉及 OP | 说明与注意事项 |
+|------|----------|---------|----------------|
+| B5-01.1 | `x.float()`、`weight.float()` | dtype 转换 | Router score 用 float 计算，增加精度同时引入 cast。 |
+| B5-01.2 | `linear(...)` | Linear/量化分派 | Gate weight dtype 仍会决定 `linear` 的内部路径。 |
+| B5-01.3 | `softmax/sigmoid/softplus/sqrt` | 激活/归一化 | 不同 score 函数对应不同路由权重语义。 |
+| B5-01.4 | `scores + bias` | broadcast add | bias 只影响 top-k 选择，不改变 `original_scores`。 |
+| B5-01.5 | `self.tid2eid[input_ids]` | embedding-like indexing | hash routing 根据 token id 直接查 expert id。 |
+| B5-01.6 | `scores.topk(...)[1]` | top-k | 选 expert id，输出 shape `[tokens, topk]`。 |
+| B5-01.7 | `original_scores.gather(1, indices)` | gather | 按 top-k expert id 取原始权重。 |
+| B5-01.8 | `weights.sum(..., keepdim=True)` | reduction + broadcast | 非 softmax 路径需要显式归一化。 |
+| B5-02.1 | `self.w1(x)`、`self.w3(x)` | Linear | expert 内 gate/up 两路投影。 |
+| B5-02.2 | `torch.clamp` | 裁剪 | DeepSeek V4 SwiGLU 限幅，控制 gate/up 数值范围。 |
+| B5-02.3 | `F.silu(gate) * up` | 激活 + 逐元素乘 | SwiGLU 核心语义。 |
+| B5-02.4 | `weights * x` | broadcast multiply | 把 router 权重应用到 expert 输出前的 intermediate。 |
+| B5-02.5 | `x.to(dtype)` | dtype 转换 | w2 输入转回原 dtype，避免下游 dtype 扩散。 |
+| B5-03.1 | `x.view(-1, self.dim)` | layout | 合并 batch/seq，把 token 维展平。 |
+| B5-03.2 | `input_ids.flatten()` | shape 变换 | 与展平后的 token 对齐。 |
+| B5-03.3 | `zeros_like(..., dtype=float32)` | 创建输出 buffer | combine 累加使用 float32。 |
+| B5-03.4 | `bincount(...).tolist()` | 统计 + CPU 回读 | 统计 expert token 数后转 Python list，会形成 CPU-DEVICE 边界。 |
+| B5-03.5 | `torch.where(indices == i)` | dynamic shape index | 输出 token 数随数据变化，适合 reference，不适合 Graph 内部。 |
+| B5-03.6 | `x[idx]`、`weights[idx, top, None]` | advanced indexing | 取当前 expert 的 token 和对应权重。 |
+| B5-03.7 | `y[idx] += ...` | indexed accumulate | 按 token index 累加 expert 结果，重复 index 会影响累加顺序。 |
+| B5-03.8 | `dist.all_reduce(y)` | 分布式同步 | TP rank 间合并本地 expert 输出。 |
+| B5-03.9 | `shared_experts(x)`、`type_as(x).view(shape)` | expert + dtype/layout | shared expert 结果加入 routed expert，再恢复原 shape。 |
 
-## 附录 C. DeepSeek V4 在 SGLang 中的源码分析
+### B.6 HC/MHC：Pre、Post 与 Block Forward
 
-附录 C 保留 SGLang DeepSeek V4 中和 OP 使用直接相关的源码片段，重点看 attention prepare、metadata copy、Graph runner、HC/MHC reference 和 MoE SwiGLU 链路。
+源码位置：`inference/model.py`。
 
-### C.1 SGLang DeepSeek V4：Attention Prepare
+```python
+# [B6-01]
+def hc_pre(self, x, hc_fn, hc_scale, hc_base):
+    shape, dtype = x.size(), x.dtype
+    x = x.flatten(2).float()
+    rsqrt = torch.rsqrt(x.square().mean(-1, keepdim=True) + self.norm_eps)
+    mixes = F.linear(x, hc_fn) * rsqrt
+    pre, post, comb = hc_split_sinkhorn(mixes, hc_scale, hc_base, self.hc_mult, self.hc_sinkhorn_iters, self.hc_eps)
+    y = torch.sum(pre.unsqueeze(-1) * x.view(shape), dim=2)
+    return y.to(dtype), post, comb
+
+# [B6-02]
+def hc_post(self, x, residual, post, comb):
+    y = post.unsqueeze(-1) * x.unsqueeze(-2) + torch.sum(comb.unsqueeze(-1) * residual.unsqueeze(-2), dim=2)
+    return y.type_as(x)
+
+# [B6-03]
+def forward(self, x, start_pos, input_ids):
+    residual = x
+    x, post, comb = self.hc_pre(x, self.hc_attn_fn, self.hc_attn_scale, self.hc_attn_base)
+    x = self.attn_norm(x)
+    x = self.attn(x, start_pos)
+    x = self.hc_post(x, residual, post, comb)
+
+    residual = x
+    x, post, comb = self.hc_pre(x, self.hc_ffn_fn, self.hc_ffn_scale, self.hc_ffn_base)
+    x = self.ffn_norm(x)
+    x = self.ffn(x, input_ids)
+    x = self.hc_post(x, residual, post, comb)
+    return x
+```
+
+逐行分析：
+
+| 编号 | 源码动作 | 涉及 OP | 说明与注意事项 |
+|------|----------|---------|----------------|
+| B6-01.1 | `shape, dtype = x.size(), x.dtype` | metadata 读取 | 保存原 shape/dtype，后面恢复输出。 |
+| B6-01.2 | `x.flatten(2).float()` | flatten + cast | 把 HC copy 维和 hidden 维合并，计算使用 float。 |
+| B6-01.3 | `square().mean().rsqrt()` | RMS-like norm | 生成每个 token 的归一化 scale。 |
+| B6-01.4 | `F.linear(x, hc_fn) * rsqrt` | Linear + broadcast | 生成 HC mixing 参数并归一化。 |
+| B6-01.5 | `hc_split_sinkhorn(...)` | 自定义混合拆分 | 把 mixes 拆成 `pre/post/comb`。 |
+| B6-01.6 | `pre.unsqueeze(-1) * x.view(shape)` | broadcast + view | `pre` 权重作用到每个 HC copy。 |
+| B6-01.7 | `torch.sum(..., dim=2)` | reduction | 沿 HC copy 维压缩成普通 hidden。 |
+| B6-01.8 | `y.to(dtype)` | dtype 转换 | 输出恢复到输入 dtype。 |
+| B6-02.1 | `post.unsqueeze(-1) * x.unsqueeze(-2)` | broadcast | 把 attention/FFN 输出扩展回 HC copy 维。 |
+| B6-02.2 | `comb.unsqueeze(-1) * residual.unsqueeze(-2)` | broadcast multiply | residual 的 HC copy 间做组合。 |
+| B6-02.3 | `torch.sum(..., dim=2)` | reduction | 合并 residual copy 维。 |
+| B6-02.4 | `type_as(x)` | dtype 对齐 | 输出 dtype 与当前 hidden 对齐。 |
+| B6-03.1 | `residual = x` | 引用保存 | 保存 HC residual，供 post 阶段组合。 |
+| B6-03.2 | `hc_pre -> attn_norm -> attn -> hc_post` | OP 链 | attention 子层不再是简单 residual add，而是 HC pre/post 包裹。 |
+| B6-03.3 | `hc_pre -> ffn_norm -> ffn -> hc_post` | OP 链 | FFN/MoE 子层同样通过 HC 混合回多 copy 状态。 |
+
+### B.7 权重转换：FP8 反量化与 FP4 视图转换
+
+源码位置：`inference/convert.py`。
+
+```python
+# [B7-01]
+weight = state_dicts[i][name]
+scale = state_dicts[i].pop(name.replace("weight", "scale"))
+weight = weight.unflatten(0, (-1, 128)).unflatten(-1, (-1, 128)).float() * scale[:, None, :, None].float()
+state_dicts[i][name] = weight.flatten(2, 3).flatten(0, 1).bfloat16()
+
+# [B7-02]
+if expert_dtype == "fp8":
+    scale_name = name.replace("weight", "scale")
+    weight = state_dicts[i].pop(name)
+    scale = state_dicts[i].pop(scale_name)
+    state_dicts[i][name], state_dicts[i][scale_name] = cast_e2m1fn_to_e4m3fn(weight, scale)
+else:
+    state_dicts[i][name] = state_dicts[i][name].view(torch.float4_e2m1fn_x2)
+```
+
+逐行分析：
+
+| 编号 | 源码动作 | 涉及 OP | 说明与注意事项 |
+|------|----------|---------|----------------|
+| B7-01.1 | `pop(scale)` | dict 操作 | scale 从 state_dict 中取出并移除，避免重复保存。 |
+| B7-01.2 | `unflatten(0, (-1,128))` | shape 变换 | 把 out 维按 block 还原。 |
+| B7-01.3 | `unflatten(-1, (-1,128))` | shape 变换 | 把 in/K 维按 block 还原。 |
+| B7-01.4 | `.float() * scale[:, None, :, None].float()` | cast + broadcast multiply | 用 scale 反量化每个 block。 |
+| B7-01.5 | `flatten(2,3).flatten(0,1).bfloat16()` | flatten + cast | 恢复普通矩阵 layout，并保存为 BF16。 |
+| B7-02.1 | `cast_e2m1fn_to_e4m3fn` | 格式转换 | FP4/FP8 格式转换同时更新 weight 和 scale。 |
+| B7-02.2 | `view(torch.float4_e2m1fn_x2)` | dtype view | 对底层 packed 数据重新解释为 FP4 dtype，不是数值计算转换。 |
+
+## 附录 C. DeepSeek V4 在 SGLang 中的源码逐行分析
+
+附录 C 聚焦 SGLang DeepSeek V4 的运行时源码。和附录 B 的 reference 模型不同，SGLang 代码更强调在线推理：多 stream prepare、metadata 原地更新、Graph replay、HC/MHC 可替换路径，以及 MoE SwiGLU 的执行路径选择。
+
+### C.1 Attention Prepare：多 Stream、Q/KV 计算、RoPE 与 Cache Store
 
 源码位置：`python/sglang/srt/models/deepseek_v4.py`。
 
 ```python
+# [C1-01]
+current_stream = torch.cuda.current_stream()
+stream_kv = self.alt_streams[0]
+stream_compressor = self.alt_streams[1]
+stream_indexer = self.alt_streams[2]
+
+stream_kv.wait_stream(current_stream)
+stream_compressor.wait_stream(current_stream)
+stream_indexer.wait_stream(current_stream)
+
+q_lora = self._compute_q_a(x, qkv_a=qkv_a)
+q_lora_ready = current_stream.record_event()
+
+if self.indexer is not None:
+    with torch.cuda.stream(stream_indexer):
+        self.indexer(x=x, q_lora=q_lora, forward_batch=forward_batch, enable_multi_stream=True, q_lora_ready=q_lora_ready)
+
+with torch.cuda.stream(stream_kv):
+    if qkv_a_ready is not None:
+        stream_kv.wait_event(qkv_a_ready)
+    kv = self._compute_kv(x, positions, qkv_a=qkv_a)
+    if self.overlap_store_cache:
+        attn_backend.store_cache(layer_id=self.layer_id, swa_k=kv, forward_batch=forward_batch)
+
+if self.compressor is not None:
+    with torch.cuda.stream(stream_compressor):
+        attn_backend.forward_core_compressor(x, forward_batch, self.layer_id, self.compressor)
+
+q = self._compute_q_b(q_lora, positions)
+if q_out is not None:
+    q_out.copy_(q)
+
+current_stream.wait_stream(stream_kv)
+current_stream.wait_stream(stream_compressor)
+current_stream.wait_stream(stream_indexer)
+return q, kv
+```
+
+逐行分析：
+
+| 编号 | 源码动作 | 涉及 OP/API | 说明与注意事项 |
+|------|----------|-------------|----------------|
+| C1-01.1 | `current_stream()` | stream 查询 | 读取当前 compute stream，后续建立多 stream 依赖。 |
+| C1-01.2 | `self.alt_streams[...]` | Python list 访问 | 分出 KV、compressor、indexer 三条辅助 stream。 |
+| C1-01.3 | `wait_stream(current_stream)` | stream 同步 | 辅助 stream 等待当前 stream 上的输入准备完成。 |
+| C1-01.4 | `_compute_q_a` | Linear/norm 子图 | 生成 Q LoRA 中间态。 |
+| C1-01.5 | `record_event()` | event 同步 | 记录 Q LoRA ready 事件，给 indexer 使用。 |
+| C1-01.6 | `with torch.cuda.stream(stream_indexer)` | stream context | indexer 在独立 stream 生成 sparse/compressed index。 |
+| C1-01.7 | `stream_kv.wait_event(qkv_a_ready)` | event wait | KV 计算依赖融合 QKV-A 输出时才等待。 |
+| C1-01.8 | `_compute_kv` | Linear/RoPE/norm 子图 | 生成 KV tensor。 |
+| C1-01.9 | `store_cache(...)` | cache 写入 | 把 KV 写入 paged/sliding cache，依赖 `forward_batch` metadata。 |
+| C1-01.10 | `forward_core_compressor(...)` | compressor 子图 | 压缩 KV 路径并行执行。 |
+| C1-01.11 | `_compute_q_b` | Linear/RoPE 子图 | Q 的第二段投影在主 stream 完成。 |
+| C1-01.12 | `q_out.copy_(q)` | 原地 copy | 写入预分配输出，Graph 或多 stream 场景中保持对象地址不变。 |
+| C1-01.13 | `current_stream.wait_stream(...)` | stream join | 主 stream 等待 KV、compressor、indexer 完成，保证返回前数据可用。 |
+
+### C.2 Attention Prepare：普通路径中的 Q/KV Layout 与 RoPE
+
+源码位置：`python/sglang/srt/models/deepseek_v4.py`。
+
+```python
+# [C2-01]
+if self.fuse_wqa_wkv:
+    qkv_a, _ = self.wqkv_a(x)
+    q = qkv_a[..., : self.q_lora_rank]
+    kv = qkv_a[..., self.q_lora_rank :]
+    del qkv_a
+else:
+    kv, _ = self.wkv(x)
+    q, _ = self.wq_a(x)
 q = self.q_norm(q)
 q_lora = q
 q, _ = self.wq_b(q)
 q = q.view(-1, self.n_local_heads, self.head_dim)
+if self.use_jit_norm:
+    q = rmsnorm_self(q, self.eps)
+else:
+    q = rms_normalize_triton(q, self.eps)
 
 kv = self.kv_norm(kv)
 fused_rope(
@@ -4273,80 +4691,327 @@ fused_rope(
     positions=positions,
 )
 
+if self.nsa_enable_prefill_cp and nsa_use_prefill_cp(forward_batch):
+    kv = cp_all_gather_rerange_output(kv.contiguous(), self.cp_size, forward_batch, torch.cuda.current_stream())
+
+if self.overlap_store_cache:
+    attn_backend.store_cache(layer_id=self.layer_id, swa_k=kv, forward_batch=forward_batch)
+
+if self.indexer is not None:
+    self.indexer(x=x, q_lora=q_lora, forward_batch=forward_batch)
+if self.compressor is not None:
+    attn_backend.forward_core_compressor(x, forward_batch, self.layer_id, self.compressor)
+
 if q_out is not None:
     q_out.copy_(q)
 return q, kv
 ```
 
-OP 注释：
+逐行分析：
 
-| OP | 作用 | 注意事项 |
-|----|------|----------|
-| `view` | Q projection 输出转成 attention head layout | 输入 stride 要满足 view 约束 |
-| `unsqueeze` | 给 KV RoPE 维补 head 维 | 只改变 view，不复制数据 |
-| `copy_` | 写入预分配 q_out | Graph/multi-stream 场景中保持固定对象地址 |
+| 编号 | 源码动作 | 涉及 OP/API | 说明与注意事项 |
+|------|----------|-------------|----------------|
+| C2-01.1 | `self.wqkv_a(x)` | Linear | fused QKV-A 路径一次 projection 得到 Q LoRA 和 KV。 |
+| C2-01.2 | `qkv_a[..., :rank]` / `[..., rank:]` | slice | 按最后一维切分 Q 和 KV，不复制数据。 |
+| C2-01.3 | `del qkv_a` | 生命周期管理 | 释放中间引用，降低峰值显存压力。 |
+| C2-01.4 | `self.wkv(x)`、`self.wq_a(x)` | Linear | 非融合路径分别计算 KV 和 Q-A。 |
+| C2-01.5 | `self.q_norm(q)` | norm | Q-A 后归一化。 |
+| C2-01.6 | `q_lora = q` | 引用保存 | indexer 需要使用 Q LoRA 表示。 |
+| C2-01.7 | `self.wq_b(q)` | Linear | Q-B 投影到完整 heads。 |
+| C2-01.8 | `q.view(-1, heads, head_dim)` | view | 整理 attention head layout，要求输入 stride 兼容。 |
+| C2-01.9 | `rmsnorm_self` / `rms_normalize_triton` | norm kernel | Q 归一化路径按配置选择实现。 |
+| C2-01.10 | `self.kv_norm(kv)` | norm | KV path 归一化。 |
+| C2-01.11 | `q[..., -rope_dim:]` | slice | 只对 RoPE 维操作。 |
+| C2-01.12 | `kv[..., -rope_dim:].unsqueeze(1)` | slice + unsqueeze | 给 KV RoPE 维补 head 维，适配 fused_rope 输入。 |
+| C2-01.13 | `fused_rope(...)` | fused RoPE | 同时更新 Q/KV RoPE 维。 |
+| C2-01.14 | `kv.contiguous()` | layout copy 可能发生 | CP all-gather 需要连续输入，可能引入真实 copy。 |
+| C2-01.15 | `store_cache` | cache 写入 | 把 KV 和 metadata 交给 attention backend 写 cache。 |
+| C2-01.16 | `indexer(...)`、`forward_core_compressor(...)` | index/compress 子图 | 准备 sparse/compressed attention metadata。 |
+| C2-01.17 | `q_out.copy_(q)` | 原地 copy | replay 或外部 buffer 需要固定对象时使用。 |
 
-### C.2 SGLang DeepSeek V4：Metadata 与 Graph Runner
+### C.3 Metadata Copy 与 Graph Metadata Replay
 
-源码位置：`python/sglang/srt/layers/attention/deepseek_v4_backend.py`、`python/sglang/srt/model_executor/cuda_graph_runner.py`。
+源码位置：`python/sglang/srt/layers/attention/deepseek_v4_backend.py`。
 
 ```python
-def copy_(self, other):
+# [C3-01]
+def copy_(self, other: DSV4AttnMetadata) -> None:
+    copy_metadata(
+        src=other,
+        dst=self,
+        check_eq_fields=["c4_sparse_topk", "page_size", "cuda_int32_kwargs"],
+        copy_fields=[
+            "raw_out_loc", "seq_lens_casual", "positions_casual", "c4_out_loc",
+            "c128_out_loc", "page_table", "swa_page_indices", "swa_topk_lengths",
+            "c128_page_indices", "c128_topk_lengths_clamp1", "c4_topk_lengths_raw",
+            "c4_topk_lengths_clamp1", "c4_sparse_topk_lengths", "c4_sparse_page_indices",
+        ],
+        assign_fields=["c1_flashmla_metadata", "c4_flashmla_metadata", "c128_flashmla_metadata"],
+    )
+
+# [C3-02]
+def copy_(self, other: DSV4RawDecodeMetadata):
     self.req_pool_indices.copy_(other.req_pool_indices)
     self.seq_lens.copy_(other.seq_lens)
     self.out_cache_loc.copy_(other.out_cache_loc)
+
+# [C3-03]
+def replay_cuda_graph_metadata_from(self, bs, temp_metadata, bucket):
+    chosen_metadata = self.cuda_graph_metadata_of_bucket_and_bs[bucket][bs]
+    chosen_metadata.copy_(temp_metadata)
+    self.forward_metadata = chosen_metadata
 ```
 
+逐行分析：
+
+| 编号 | 源码动作 | 涉及 OP/API | 说明与注意事项 |
+|------|----------|-------------|----------------|
+| C3-01.1 | `check_eq_fields=[...]` | metadata 校验 | 这些字段必须和 capture 时一致，不能 replay 时改变结构约束。 |
+| C3-01.2 | `copy_fields=[...]` | tensor 字段 copy | 普通 tensor metadata 用原地复制，保持目标对象地址不变。 |
+| C3-01.3 | `assign_fields=[...]` | Python 引用赋值 | FlashMLA metadata 是特殊对象，按实现约定替换引用。 |
+| C3-02.1 | `req_pool_indices.copy_` | 原地 copy | replay 前更新 request pool index 内容。 |
+| C3-02.2 | `seq_lens.copy_` | 原地 copy | 更新 DEVICE侧 seq lens。 |
+| C3-02.3 | `out_cache_loc.copy_` | 原地 copy | 更新输出 cache 位置。 |
+| C3-03.1 | `chosen_metadata = ...[bucket][bs]` | dict lookup | 按 graph bucket 和 batch size 找到 capture 时的 metadata 对象。 |
+| C3-03.2 | `chosen_metadata.copy_(temp_metadata)` | 原地 metadata 更新 | 把动态请求 metadata 写入固定对象。 |
+| C3-03.3 | `self.forward_metadata = chosen_metadata` | 引用切换 | forward 使用固定 metadata 对象，服务 graph replay。 |
+
+### C.4 Forward Metadata 初始化与 Replay 准备
+
+源码位置：`python/sglang/srt/layers/attention/deepseek_v4_backend.py`。
+
 ```python
+# [C4-01]
+req_pool_indices = forward_batch.req_pool_indices
 seq_lens = forward_batch.seq_lens.to(torch.int32)
 seq_lens_cpu = forward_batch.seq_lens_cpu
 max_seq_len = int(seq_lens_cpu.max().item())
+
+if forward_batch.forward_mode.is_decode_or_idle():
+    metadata = self.init_forward_metadata_decode(
+        max_seq_len=max_seq_len,
+        req_pool_indices=req_pool_indices,
+        seq_lens=seq_lens,
+        out_cache_loc=forward_batch.out_cache_loc,
+    )
+elif forward_batch.forward_mode.is_prefill(include_draft_extend_v2=True):
+    extend_seq_lens_cpu = forward_batch.extend_seq_lens_cpu
+    extend_seq_lens = forward_batch.extend_seq_lens
+    metadata = self.init_forward_metadata_prefill(
+        max_seq_len=max_seq_len,
+        req_pool_indices=req_pool_indices,
+        seq_lens=seq_lens,
+        seq_lens_cpu=seq_lens_cpu.tolist(),
+        out_cache_loc=forward_batch.out_cache_loc,
+        num_tokens=sum(extend_seq_lens_cpu),
+        extend_seq_lens=extend_seq_lens,
+        extend_seq_lens_cpu=extend_seq_lens_cpu,
+        need_compress=not is_draft,
+    )
+self.forward_metadata = metadata
+
+# [C4-02]
+seq_lens = seq_lens[:bs]
+seq_lens_cpu = seq_lens_cpu[:bs]
+req_pool_indices = req_pool_indices[:bs]
+actual_max_seq_len = seq_lens_cpu.max().item()
+chosen_max_seq_len = self.MAX_SEQ_LEN_FOR_CAPTURE
+assert actual_max_seq_len <= chosen_max_seq_len
+out_cache_loc_padded = torch.nn.functional.pad(out_cache_loc, pad=(0, bs - len(out_cache_loc)), mode="constant", value=0)
+temp_metadata = self.init_forward_metadata_decode(
+    max_seq_len=chosen_max_seq_len,
+    req_pool_indices=req_pool_indices,
+    seq_lens=seq_lens,
+    out_cache_loc=out_cache_loc_padded,
+)
+self.replay_cuda_graph_metadata_from(bs=bs, temp_metadata=temp_metadata, bucket=bucket)
 ```
 
-```python
-if bs != raw_bs:
-    self.seq_lens.fill_(seq_len_fill_value)
-    self.out_cache_loc.zero_()
+逐行分析：
 
-with ctx:
-    self.graphs[graph_key].replay()
+| 编号 | 源码动作 | 涉及 OP/API | 说明与注意事项 |
+|------|----------|-------------|----------------|
+| C4-01.1 | `seq_lens.to(torch.int32)` | dtype 转换 | attention metadata 统一 int32，避免 kernel 内隐式 cast。 |
+| C4-01.2 | `seq_lens_cpu = ...` | CPU metadata | CPU 侧保存长度，供 max、bucket 等调度判断。 |
+| C4-01.3 | `seq_lens_cpu.max().item()` | CPU tensor 标量读取 | 这里读取 CPU metadata，不需要等待 DEVICE tensor。 |
+| C4-01.4 | decode 分支 | Python 控制流 | 根据 forward mode 选择 metadata 构造路径，位于 Graph 外。 |
+| C4-01.5 | prefill 分支 `tolist()` | CPU list 转换 | `seq_lens_cpu` 本来是 CPU metadata，转换为 list 供 Python 构造逻辑使用。 |
+| C4-01.6 | `sum(extend_seq_lens_cpu)` | Python/CPU 统计 | 统计 prefill token 数。 |
+| C4-01.7 | `self.forward_metadata = metadata` | 引用赋值 | 当前 forward 使用构造好的 metadata。 |
+| C4-02.1 | `seq_lens[:bs]` | slice | replay bucket 只取真实 batch 前缀。 |
+| C4-02.2 | `actual_max_seq_len <= chosen_max_seq_len` | 约束检查 | 真实长度不能超过 capture bucket 的上限。 |
+| C4-02.3 | `F.pad(out_cache_loc, ...)` | padding | 把真实 out cache 位置补到 graph bucket 需要的固定长度。 |
+| C4-02.4 | `init_forward_metadata_decode(...)` | metadata 构造 | 使用固定 `chosen_max_seq_len` 重新生成 replay metadata。 |
+| C4-02.5 | `replay_cuda_graph_metadata_from(...)` | metadata copy | temp metadata 写入 capture 时的固定 metadata 对象。 |
+
+### C.5 Decode Graph Buffer：CPU/GPU Buffer 的分开更新
+
+源码位置：`python/sglang/srt/model_executor/cuda_graph_runner.py`。
+
+```python
+# [C5-01]
+seq_lens_cpu = torch.full(
+    (max_bs,),
+    seq_len_fill_value,
+    dtype=torch.int32,
+    device="cpu",
+)
+
+# [C5-02]
+_grouped_foreach_copy_(dsts, srcs)
+
+if forward_batch.seq_lens_cpu is not None:
+    if bs != raw_bs:
+        self.seq_lens_cpu.fill_(seq_len_fill_value)
+    self.seq_lens_cpu[:raw_bs].copy_(forward_batch.seq_lens_cpu)
 ```
 
-OP 注释：
+逐行分析：
 
-| OP | 作用 | 注意事项 |
-|----|------|----------|
-| `copy_` | replay 前更新固定 metadata tensor 内容 | capture 后不要替换 tensor 对象 |
-| `to(torch.int32)` | 对齐 backend metadata dtype | 避免后端内隐式 cast |
-| `.item()` | 从 CPU侧元数据副本读标量 | 不应从 GPU tensor 高频回读 |
-| `fill_/zero_` | 清理 padding 槽位 | 防止上一轮 batch 残留 |
-| `graph.replay()` | 重放固定执行路径 | capture 内不能有动态 shape、CPU sync 或 unsupported backend |
+| 编号 | 源码动作 | 涉及 OP/API | 说明与注意事项 |
+|------|----------|-------------|----------------|
+| C5-01.1 | `torch.full(..., device="cpu")` | CPU tensor 创建 | `seq_lens_cpu` 明确保持在 CPU，避免为了调度标量从 DEVICE 回读。 |
+| C5-01.2 | `seq_len_fill_value` | padding 默认值 | capture bucket 中未使用槽位需要稳定填充值。 |
+| C5-02.1 | `_grouped_foreach_copy_(dsts, srcs)` | batched GPU copy | 多个 GPU tensor copy 按 dtype 分组批量执行，减少 Python 循环开销。 |
+| C5-02.2 | `if forward_batch.seq_lens_cpu is not None` | CPU metadata 分支 | CPU tensor 不能和 GPU tensor 一起 foreach copy。 |
+| C5-02.3 | `self.seq_lens_cpu.fill_` | CPU 原地填充 | raw batch 小于 bucket 时清理 CPU padding 槽位。 |
+| C5-02.4 | `self.seq_lens_cpu[:raw_bs].copy_` | CPU copy | 更新真实 batch 的 CPU seq lens。 |
 
-### C.3 SGLang DeepSeek V4：HC/MHC 与 MoE SwiGLU
+### C.6 HC/MHC：Torch Reference、TileLang/DeepGEMM 路径与 Post Combine
 
-源码位置：`python/sglang/srt/models/deepseek_v4.py`、`python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py`。
+源码位置：`python/sglang/srt/models/deepseek_v4.py`。
 
 ```python
+# [C6-01]
 def hc_pre_torch_impl(x, hc_fn):
     x_flat = x.flatten(1).float()
     rsqrt = torch.rsqrt(x_flat.square().mean(-1, keepdim=True) + self.rms_norm_eps)
     mixes = (F.linear(x_flat, hc_fn) * rsqrt).unsqueeze(1)
     return x_flat, mixes
+
+shape, dtype = x.size(), x.dtype
+if x.shape[0] == 0:
+    y = torch.empty((0, shape[-1]), dtype=dtype, device=x.device)
+    post = torch.empty((0, self.hc_mult), dtype=dtype, device=x.device)
+    comb = torch.empty((0, self.hc_mult, self.hc_mult), dtype=dtype, device=x.device)
+    return y, post, comb, False
+
+if envs.SGLANG_OPT_USE_TILELANG_MHC_PRE.get():
+    post, comb, y = mhc_pre(
+        residual=x,
+        fn=hc_fn,
+        hc_scale=hc_scale,
+        hc_base=hc_base,
+        rms_eps=self.rms_norm_eps,
+        hc_pre_eps=self.hc_eps,
+        hc_sinkhorn_eps=self.hc_eps,
+        hc_post_mult_value=2.0,
+        sinkhorn_repeat=self.hc_sinkhorn_iters,
+        **norm_kwargs,
+    )
+    return y, post.squeeze(-1), comb, fuse_norm
+
+if envs.SGLANG_OPT_DEEPGEMM_HC_PRENORM.get():
+    x_flat = x.flatten(1).bfloat16()
+    m, k = x_flat.shape
+    mix_hc = hc_fn.size(0)
+    d_out = torch.empty((m, mix_hc), dtype=torch.float, device=x.device)
+    s_out = torch.empty((m,), dtype=torch.float, device=x.device)
+    deep_gemm.tf32_hc_prenorm_gemm(x_flat, hc_fn.float().contiguous(), d_out, s_out, num_splits=None)
+    rsqrt = torch.rsqrt(s_out / k + self.rms_norm_eps)
+    mixes = (d_out * rsqrt.unsqueeze(1)).unsqueeze(1)
+else:
+    x_flat, mixes = hc_pre_torch_impl(x, hc_fn)
+
+pre, post, comb = hc_split_sinkhorn(mixes, hc_scale, hc_base, self.hc_mult, self.hc_sinkhorn_iters, self.hc_eps)
+y = (pre.squeeze(1).unsqueeze(-1) * x_flat.view(shape)).sum(dim=1)
+return y.to(dtype), post.squeeze(1), comb.squeeze(1), False
+
+# [C6-02]
+def hc_post_torch_impl(x, residual, post, comb):
+    return (
+        post.unsqueeze(-1) * x.unsqueeze(1)
+        + (comb.unsqueeze(-1) * residual.unsqueeze(2)).sum(dim=1)
+    ).type_as(x)
 ```
+
+逐行分析：
+
+| 编号 | 源码动作 | 涉及 OP/API | 说明与注意事项 |
+|------|----------|-------------|----------------|
+| C6-01.1 | `x.flatten(1).float()` | flatten + cast | 把 HC copy 和 hidden 维展平成 `[tokens, features]`，用 float 算 reference。 |
+| C6-01.2 | `square().mean().rsqrt()` | norm OP 链 | 生成 RMS-like scale。 |
+| C6-01.3 | `F.linear(x_flat, hc_fn)` | Linear | 生成 HC mixing 参数。 |
+| C6-01.4 | `unsqueeze(1)` | shape 变换 | 增加 piece 维，匹配 `hc_split_sinkhorn` 输入。 |
+| C6-01.5 | `torch.empty((0, shape[-1]))`、`torch.empty((0, self.hc_mult))` | 空 tensor 创建 | 空 batch 特判，避免后续 kernel 处理 0 维异常。 |
+| C6-01.6 | `mhc_pre` 调用 | custom kernel 路径 | 可替代 torch reference，返回 y/post/comb。 |
+| C6-01.7 | `x.flatten(1).bfloat16()` | flatten + cast | DeepGEMM 路径使用 BF16 输入。 |
+| C6-01.8 | `torch.empty` for `d_out/s_out` | workspace 创建 | custom GEMM 输出 mixing 和平方和。 |
+| C6-01.9 | `hc_fn.float().contiguous()` | cast + layout copy | kernel 要求 FP32 且连续 weight。 |
+| C6-01.10 | `rsqrt(s_out / k + eps)` | reduction 后归一化 | 使用 custom kernel 产生的 `s_out` 计算 scale。 |
+| C6-01.11 | `hc_split_sinkhorn` | split/normalize | 把 mixing 参数拆为 pre/post/comb。 |
+| C6-01.12 | `pre.squeeze(1).unsqueeze(-1)` | shape 调整 | 对齐 `x_flat.view(shape)` 的 HC copy 维。 |
+| C6-01.13 | `sum(dim=1)` | reduction | HC pre 把多 copy 压成一个 hidden。 |
+| C6-02.1 | `post.unsqueeze(-1) * x.unsqueeze(1)` | broadcast multiply | 当前子层输出扩展到 HC copy 维。 |
+| C6-02.2 | `comb.unsqueeze(-1) * residual.unsqueeze(2)` | broadcast multiply | residual 的 HC copy 间组合。 |
+| C6-02.3 | `.sum(dim=1)` | reduction | 合成 post 输出。 |
+| C6-02.4 | `.type_as(x)` | dtype 对齐 | 输出 dtype 与当前 hidden 一致。 |
+
+### C.7 MoE SwiGLU Clamp：Reference、原地裁剪与 SwishGLU 路径
+
+源码位置：`python/sglang/srt/layers/moe/moe_runner/triton_utils/fused_moe.py`。
 
 ```python
-intermediate_cache1[:, :half].clamp_(max=swiglu_limit)
-intermediate_cache1[:, half:].clamp_(min=-swiglu_limit, max=swiglu_limit)
+# [C7-01]
+def _swiglu_silu_clamp_mul(x, gemm1_limit):
+    gate, up = x.chunk(2, dim=-1)
+    gate = F.silu(gate)
+    gate = gate.clamp(min=None, max=gemm1_limit)
+    up = up.clamp(min=-gemm1_limit, max=gemm1_limit)
+    return gate * up
 
-if _is_musa:
-    intermediate_cache2 = torch.nn.SwishGLU()(intermediate_cache1.view(-1, N))
+# [C7-02]
+elif swiglu_limit is not None:
+    assert swiglu_limit == 10
+    assert intermediate_cache1.shape == (total_tokens, N)
+    swiglu_limit_for_triton = None
+    swiglu_limit_for_silu_and_mul_clamp = None
+
+    if envs.SGLANG_OPT_SWIGLU_CLAMP_FUSION.get():
+        if filter_expert:
+            swiglu_limit_for_triton = swiglu_limit
+        else:
+            swiglu_limit_for_silu_and_mul_clamp = swiglu_limit
+    else:
+        half = N // 2
+        intermediate_cache1[:, :half].clamp_(max=swiglu_limit)
+        intermediate_cache1[:, half:].clamp_(min=-swiglu_limit, max=swiglu_limit)
+
+    if not filter_expert:
+        if swiglu_limit_for_silu_and_mul_clamp is not None:
+            silu_and_mul_clamp(intermediate_cache1.view(-1, N), intermediate_cache2, swiglu_limit_for_silu_and_mul_clamp)
+        else:
+            if _is_musa:
+                intermediate_cache2 = torch.nn.SwishGLU()(intermediate_cache1.view(-1, N))
+            else:
+                silu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
 ```
 
-OP 注释：
+逐行分析：
 
-| OP | 作用 | 注意事项 |
-|----|------|----------|
-| `flatten/float/rsqrt/F.linear` | HC/MHC reference 语义 | 多个 OP 串联会产生多次 launch，热点路径需要融合实现 |
-| `clamp_` | SwiGLU 前限制 gate/up 数值范围 | 原地写会覆盖输入，后续不能再依赖原值 |
-| `view` | 整理 SwishGLU 输入 shape | 输入 layout 必须满足 view 约束 |
-| `torch.nn.SwishGLU` | SwiGLU activation 路径 | 需要和 PyTorch `silu(gate) * up` reference 对齐 |
+| 编号 | 源码动作 | 涉及 OP/API | 说明与注意事项 |
+|------|----------|-------------|----------------|
+| C7-01.1 | `x.chunk(2, dim=-1)` | chunk | 把 GEMM1 输出拆成 gate/up 两半，返回 view。 |
+| C7-01.2 | `F.silu(gate)` | activation | gate 分支先做 SiLU。 |
+| C7-01.3 | `gate.clamp(...)` | clamp | 限制 gate 上界。 |
+| C7-01.4 | `up.clamp(...)` | clamp | 限制 up 分支上下界。 |
+| C7-01.5 | `gate * up` | elementwise multiply | SwiGLU 输出。 |
+| C7-02.1 | `assert intermediate_cache1.shape == ...` | shape 检查 | 确认 GEMM1 输出是 `[tokens, 2*intermediate]`。 |
+| C7-02.2 | fusion 环境分支 | Python 控制流 | 选择 fused clamp 路径或显式 PyTorch clamp 路径。 |
+| C7-02.3 | `half = N // 2` | shape 计算 | 分出 gate/up 分界。 |
+| C7-02.4 | `intermediate_cache1[:, :half].clamp_` | 原地 clamp | gate 分支被原地覆盖，后续不能再读取裁剪前值。 |
+| C7-02.5 | `intermediate_cache1[:, half:].clamp_` | 原地 clamp | up 分支同样被原地覆盖。 |
+| C7-02.6 | `intermediate_cache1.view(-1, N)` | view | activation kernel/SwishGLU 输入需要二维 `[tokens,N]`。 |
+| C7-02.7 | `silu_and_mul_clamp` | fused kernel | clamp、silu、mul 在一个路径完成。 |
+| C7-02.8 | `torch.nn.SwishGLU()` | module OP | MUSA 路径调用 PyTorch module 表达 SwiGLU 语义。 |
+| C7-02.9 | `silu_and_mul(...)` | fused activation | 非 MUSA 分支使用已有 fused activation 输出到 `intermediate_cache2`。 |
