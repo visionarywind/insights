@@ -1,0 +1,4 @@
+x = Tensor(shape=(3,), dtype=int64, device=musa:0, value=[0, 1, 2])
+y1 = Tensor(shape=(6,), dtype=int64, device=musa:0, value=[0, 0, 1, 1, 2, 2])
+repeats = Tensor(shape=(3,), dtype=int64, device=musa:0, value=[1, 2, 1])
+y2 = Tensor(shape=(4,), dtype=int64, device=musa:0, value=[0, 1, 1, 2])

@@ -1,0 +1,2 @@
+x = Tensor(shape=(2,), dtype=int32, device=musa:0, value=[1, 2])
+y = Tensor(shape=(2,), dtype=float32, device=musa:0, value=[1.0, 2.0])

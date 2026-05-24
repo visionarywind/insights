@@ -1,0 +1,2 @@
+x = Tensor(shape=(3, 2), dtype=int64, device=musa:0, value=[[0, 3], [1, 4], [2, 5]])
+is_contiguous = False

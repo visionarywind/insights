@@ -1,0 +1,1 @@
+chunks = (tensor([0, 1], device='musa:0'), tensor([2, 3], device='musa:0'), tensor([4, 5], device='musa:0'))

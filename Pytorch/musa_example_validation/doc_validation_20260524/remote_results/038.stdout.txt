@@ -1,0 +1,1 @@
+y = Tensor(shape=(4,), dtype=int64, device=musa:0, value=[3, 4, 5, 6])

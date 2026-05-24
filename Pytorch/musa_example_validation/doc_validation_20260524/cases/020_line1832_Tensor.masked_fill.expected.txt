@@ -1,0 +1,2 @@
+x = Tensor(shape=(4,), dtype=int64, device=musa:0, value=[-1, 2, -1, 4])
+mask = Tensor(shape=(4,), dtype=bool, device=musa:0, value=[True, False, True, False])

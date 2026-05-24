@@ -1,0 +1,2 @@
+x = Tensor(shape=(2,), dtype=int64, device=cpu, value=[1, 2])
+y = ndarray(shape=(2,), dtype=int64, value=[1, 2])

@@ -1,0 +1,569 @@
+[
+  {
+    "id": 1,
+    "line": 716,
+    "heading": "4.1 源码 OP 链抽取出的 MUSA 最小用例",
+    "script": "001_line716_4.1_OP_MUSA.py",
+    "expected": "001_line716_4.1_OP_MUSA.expected.txt"
+  },
+  {
+    "id": 2,
+    "line": 863,
+    "heading": "4.2 Prefill Metadata 构造最小用例",
+    "script": "002_line863_4.2_Prefill_Metadata.py",
+    "expected": "002_line863_4.2_Prefill_Metadata.expected.txt"
+  },
+  {
+    "id": 3,
+    "line": 911,
+    "heading": "4.3 Decode Graph Replay 最小用例",
+    "script": "003_line911_4.3_Decode_Graph_Replay.py",
+    "expected": "003_line911_4.3_Decode_Graph_Replay.expected.txt"
+  },
+  {
+    "id": 4,
+    "line": 966,
+    "heading": "4.4 KV Cache 写入最小用例",
+    "script": "004_line966_4.4_KV_Cache.py",
+    "expected": "004_line966_4.4_KV_Cache.expected.txt"
+  },
+  {
+    "id": 5,
+    "line": 1007,
+    "heading": "4.5 MoE 路由与 Combine 最小用例",
+    "script": "005_line1007_4.5_MoE_Combine.py",
+    "expected": "005_line1007_4.5_MoE_Combine.expected.txt"
+  },
+  {
+    "id": 6,
+    "line": 1045,
+    "heading": "4.6 Sampling 后处理最小用例",
+    "script": "006_line1045_4.6_Sampling.py",
+    "expected": "006_line1045_4.6_Sampling.expected.txt"
+  },
+  {
+    "id": 7,
+    "line": 1187,
+    "heading": "普通 Graph 使用样例",
+    "script": "007_line1187_Graph.py",
+    "expected": "007_line1187_Graph.expected.txt"
+  },
+  {
+    "id": 8,
+    "line": 1232,
+    "heading": "Piecewise Graph 使用样例",
+    "script": "008_line1232_Piecewise_Graph.py",
+    "expected": "008_line1232_Piecewise_Graph.expected.txt"
+  },
+  {
+    "id": 9,
+    "line": 1304,
+    "heading": "torch.compile 使用样例",
+    "script": "009_line1304_torch.compile.py",
+    "expected": "009_line1304_torch.compile.expected.txt"
+  },
+  {
+    "id": 10,
+    "line": 1458,
+    "heading": "`torch.empty`",
+    "script": "010_line1458_torch.empty.py",
+    "expected": "010_line1458_torch.empty.expected.txt"
+  },
+  {
+    "id": 11,
+    "line": 1496,
+    "heading": "`Tensor.new_empty`",
+    "script": "011_line1496_Tensor.new_empty.py",
+    "expected": "011_line1496_Tensor.new_empty.expected.txt"
+  },
+  {
+    "id": 12,
+    "line": 1533,
+    "heading": "`torch.empty_like`",
+    "script": "012_line1533_torch.empty_like.py",
+    "expected": "012_line1533_torch.empty_like.expected.txt"
+  },
+  {
+    "id": 13,
+    "line": 1570,
+    "heading": "`torch.zeros`",
+    "script": "013_line1570_torch.zeros.py",
+    "expected": "013_line1570_torch.zeros.expected.txt"
+  },
+  {
+    "id": 14,
+    "line": 1604,
+    "heading": "`torch.ones`",
+    "script": "014_line1604_torch.ones.py",
+    "expected": "014_line1604_torch.ones.expected.txt"
+  },
+  {
+    "id": 15,
+    "line": 1638,
+    "heading": "`torch.full`",
+    "script": "015_line1638_torch.full.py",
+    "expected": "015_line1638_torch.full.expected.txt"
+  },
+  {
+    "id": 16,
+    "line": 1680,
+    "heading": "`Tensor.copy_`",
+    "script": "016_line1680_Tensor.copy.py",
+    "expected": "016_line1680_Tensor.copy.expected.txt"
+  },
+  {
+    "id": 17,
+    "line": 1718,
+    "heading": "`torch._foreach_copy_`",
+    "script": "017_line1718_torch._foreach_copy.py",
+    "expected": "017_line1718_torch._foreach_copy.expected.txt"
+  },
+  {
+    "id": 18,
+    "line": 1762,
+    "heading": "`Tensor.fill_`",
+    "script": "018_line1762_Tensor.fill.py",
+    "expected": "018_line1762_Tensor.fill.expected.txt"
+  },
+  {
+    "id": 19,
+    "line": 1797,
+    "heading": "`Tensor.zero_`",
+    "script": "019_line1797_Tensor.zero.py",
+    "expected": "019_line1797_Tensor.zero.expected.txt"
+  },
+  {
+    "id": 20,
+    "line": 1832,
+    "heading": "`Tensor.masked_fill_`",
+    "script": "020_line1832_Tensor.masked_fill.py",
+    "expected": "020_line1832_Tensor.masked_fill.expected.txt"
+  },
+  {
+    "id": 21,
+    "line": 1878,
+    "heading": "`Tensor.view`",
+    "script": "021_line1878_Tensor.view.py",
+    "expected": "021_line1878_Tensor.view.expected.txt"
+  },
+  {
+    "id": 22,
+    "line": 1915,
+    "heading": "`Tensor.reshape`",
+    "script": "022_line1915_Tensor.reshape.py",
+    "expected": "022_line1915_Tensor.reshape.expected.txt"
+  },
+  {
+    "id": 23,
+    "line": 1954,
+    "heading": "`Tensor.flatten`",
+    "script": "023_line1954_Tensor.flatten.py",
+    "expected": "023_line1954_Tensor.flatten.expected.txt"
+  },
+  {
+    "id": 24,
+    "line": 1991,
+    "heading": "`Tensor.unsqueeze`",
+    "script": "024_line1991_Tensor.unsqueeze.py",
+    "expected": "024_line1991_Tensor.unsqueeze.expected.txt"
+  },
+  {
+    "id": 25,
+    "line": 2028,
+    "heading": "`Tensor.squeeze`",
+    "script": "025_line2028_Tensor.squeeze.py",
+    "expected": "025_line2028_Tensor.squeeze.expected.txt"
+  },
+  {
+    "id": 26,
+    "line": 2067,
+    "heading": "`Tensor.expand`",
+    "script": "026_line2067_Tensor.expand.py",
+    "expected": "026_line2067_Tensor.expand.expected.txt"
+  },
+  {
+    "id": 27,
+    "line": 2106,
+    "heading": "`Tensor.contiguous`",
+    "script": "027_line2106_Tensor.contiguous.py",
+    "expected": "027_line2106_Tensor.contiguous.expected.txt"
+  },
+  {
+    "id": 28,
+    "line": 2143,
+    "heading": "`Tensor.stride`",
+    "script": "028_line2143_Tensor.stride.py",
+    "expected": "028_line2143_Tensor.stride.expected.txt"
+  },
+  {
+    "id": 29,
+    "line": 2180,
+    "heading": "`Tensor.is_contiguous`",
+    "script": "029_line2180_Tensor.is_contiguous.py",
+    "expected": "029_line2180_Tensor.is_contiguous.expected.txt"
+  },
+  {
+    "id": 30,
+    "line": 2217,
+    "heading": "`Tensor.storage_offset`",
+    "script": "030_line2217_Tensor.storage_offset.py",
+    "expected": "030_line2217_Tensor.storage_offset.expected.txt"
+  },
+  {
+    "id": 31,
+    "line": 2260,
+    "heading": "Slice",
+    "script": "031_line2260_Slice.py",
+    "expected": "031_line2260_Slice.expected.txt"
+  },
+  {
+    "id": 32,
+    "line": 2297,
+    "heading": "Advanced indexing",
+    "script": "032_line2297_Advanced_indexing.py",
+    "expected": "032_line2297_Advanced_indexing.expected.txt"
+  },
+  {
+    "id": 33,
+    "line": 2340,
+    "heading": "`torch.gather`",
+    "script": "033_line2340_torch.gather.py",
+    "expected": "033_line2340_torch.gather.expected.txt"
+  },
+  {
+    "id": 34,
+    "line": 2380,
+    "heading": "`torch.take_along_dim`",
+    "script": "034_line2380_torch.take_along_dim.py",
+    "expected": "034_line2380_torch.take_along_dim.expected.txt"
+  },
+  {
+    "id": 35,
+    "line": 2420,
+    "heading": "`torch.index_select`",
+    "script": "035_line2420_torch.index_select.py",
+    "expected": "035_line2420_torch.index_select.expected.txt"
+  },
+  {
+    "id": 36,
+    "line": 2460,
+    "heading": "`Tensor.scatter_`",
+    "script": "036_line2460_Tensor.scatter.py",
+    "expected": "036_line2460_Tensor.scatter.expected.txt"
+  },
+  {
+    "id": 37,
+    "line": 2501,
+    "heading": "`Tensor.tensor_split`",
+    "script": "037_line2501_Tensor.tensor_split.py",
+    "expected": "037_line2501_Tensor.tensor_split.expected.txt"
+  },
+  {
+    "id": 38,
+    "line": 2543,
+    "heading": "`torch.arange`",
+    "script": "038_line2543_torch.arange.py",
+    "expected": "038_line2543_torch.arange.expected.txt"
+  },
+  {
+    "id": 39,
+    "line": 2577,
+    "heading": "`torch.arange(..., out=out)`",
+    "script": "039_line2577_torch.arange_..._out_out.py",
+    "expected": "039_line2577_torch.arange_..._out_out.expected.txt"
+  },
+  {
+    "id": 40,
+    "line": 2612,
+    "heading": "`repeat_interleave`",
+    "script": "040_line2612_repeat_interleave.py",
+    "expected": "040_line2612_repeat_interleave.expected.txt"
+  },
+  {
+    "id": 41,
+    "line": 2655,
+    "heading": "`torch.cat`",
+    "script": "041_line2655_torch.cat.py",
+    "expected": "041_line2655_torch.cat.expected.txt"
+  },
+  {
+    "id": 42,
+    "line": 2695,
+    "heading": "`torch.stack`",
+    "script": "042_line2695_torch.stack.py",
+    "expected": "042_line2695_torch.stack.expected.txt"
+  },
+  {
+    "id": 43,
+    "line": 2735,
+    "heading": "`torch.nn.functional.pad`",
+    "script": "043_line2735_torch.nn.functional.pad.py",
+    "expected": "043_line2735_torch.nn.functional.pad.expected.txt"
+  },
+  {
+    "id": 44,
+    "line": 2774,
+    "heading": "`torch.where`",
+    "script": "044_line2774_torch.where.py",
+    "expected": "044_line2774_torch.where.expected.txt"
+  },
+  {
+    "id": 45,
+    "line": 2817,
+    "heading": "`sum`",
+    "script": "045_line2817_sum.py",
+    "expected": "045_line2817_sum.expected.txt"
+  },
+  {
+    "id": 46,
+    "line": 2854,
+    "heading": "`mean`",
+    "script": "046_line2854_mean.py",
+    "expected": "046_line2854_mean.expected.txt"
+  },
+  {
+    "id": 47,
+    "line": 2891,
+    "heading": "`amax`",
+    "script": "047_line2891_amax.py",
+    "expected": "047_line2891_amax.expected.txt"
+  },
+  {
+    "id": 48,
+    "line": 2928,
+    "heading": "`min` / `max`",
+    "script": "048_line2928_min_max.py",
+    "expected": "048_line2928_min_max.expected.txt"
+  },
+  {
+    "id": 49,
+    "line": 2968,
+    "heading": "`abs`",
+    "script": "049_line2968_abs.py",
+    "expected": "049_line2968_abs.expected.txt"
+  },
+  {
+    "id": 50,
+    "line": 3002,
+    "heading": "`square`",
+    "script": "050_line3002_square.py",
+    "expected": "050_line3002_square.expected.txt"
+  },
+  {
+    "id": 51,
+    "line": 3036,
+    "heading": "`rsqrt`",
+    "script": "051_line3036_rsqrt.py",
+    "expected": "051_line3036_rsqrt.expected.txt"
+  },
+  {
+    "id": 52,
+    "line": 3070,
+    "heading": "`sigmoid`",
+    "script": "052_line3070_sigmoid.py",
+    "expected": "052_line3070_sigmoid.expected.txt"
+  },
+  {
+    "id": 53,
+    "line": 3104,
+    "heading": "`silu`",
+    "script": "053_line3104_silu.py",
+    "expected": "053_line3104_silu.expected.txt"
+  },
+  {
+    "id": 54,
+    "line": 3138,
+    "heading": "`gelu`",
+    "script": "054_line3138_gelu.py",
+    "expected": "054_line3138_gelu.expected.txt"
+  },
+  {
+    "id": 55,
+    "line": 3172,
+    "heading": "`relu`",
+    "script": "055_line3172_relu.py",
+    "expected": "055_line3172_relu.expected.txt"
+  },
+  {
+    "id": 56,
+    "line": 3206,
+    "heading": "`softmax`",
+    "script": "056_line3206_softmax.py",
+    "expected": "056_line3206_softmax.expected.txt"
+  },
+  {
+    "id": 57,
+    "line": 3240,
+    "heading": "`clamp`",
+    "script": "057_line3240_clamp.py",
+    "expected": "057_line3240_clamp.expected.txt"
+  },
+  {
+    "id": 58,
+    "line": 3280,
+    "heading": "`torch.nn.functional.linear`",
+    "script": "058_line3280_torch.nn.functional.linear.py",
+    "expected": "058_line3280_torch.nn.functional.linear.expected.txt"
+  },
+  {
+    "id": 59,
+    "line": 3323,
+    "heading": "`matmul`",
+    "script": "059_line3323_matmul.py",
+    "expected": "059_line3323_matmul.expected.txt"
+  },
+  {
+    "id": 60,
+    "line": 3363,
+    "heading": "`mm`",
+    "script": "060_line3363_mm.py",
+    "expected": "060_line3363_mm.expected.txt"
+  },
+  {
+    "id": 61,
+    "line": 3403,
+    "heading": "`bmm`",
+    "script": "061_line3403_bmm.py",
+    "expected": "061_line3403_bmm.expected.txt"
+  },
+  {
+    "id": 62,
+    "line": 3443,
+    "heading": "`einsum`",
+    "script": "062_line3443_einsum.py",
+    "expected": "062_line3443_einsum.expected.txt"
+  },
+  {
+    "id": 63,
+    "line": 3483,
+    "heading": "`topk`",
+    "script": "063_line3483_topk.py",
+    "expected": "063_line3483_topk.expected.txt"
+  },
+  {
+    "id": 64,
+    "line": 3522,
+    "heading": "`sort`",
+    "script": "064_line3522_sort.py",
+    "expected": "064_line3522_sort.expected.txt"
+  },
+  {
+    "id": 65,
+    "line": 3558,
+    "heading": "`argsort`",
+    "script": "065_line3558_argsort.py",
+    "expected": "065_line3558_argsort.expected.txt"
+  },
+  {
+    "id": 66,
+    "line": 3592,
+    "heading": "`argmax`",
+    "script": "066_line3592_argmax.py",
+    "expected": "066_line3592_argmax.expected.txt"
+  },
+  {
+    "id": 67,
+    "line": 3632,
+    "heading": "`Tensor.to(dtype)`",
+    "script": "067_line3632_Tensor.to_dtype.py",
+    "expected": "067_line3632_Tensor.to_dtype.expected.txt"
+  },
+  {
+    "id": 68,
+    "line": 3669,
+    "heading": "`Tensor.to(device)`",
+    "script": "068_line3669_Tensor.to_device.py",
+    "expected": "068_line3669_Tensor.to_device.expected.txt"
+  },
+  {
+    "id": 69,
+    "line": 3706,
+    "heading": "`Tensor.float`",
+    "script": "069_line3706_Tensor.float.py",
+    "expected": "069_line3706_Tensor.float.expected.txt"
+  },
+  {
+    "id": 70,
+    "line": 3743,
+    "heading": "`Tensor.bfloat16`",
+    "script": "070_line3743_Tensor.bfloat16.py",
+    "expected": "070_line3743_Tensor.bfloat16.expected.txt"
+  },
+  {
+    "id": 71,
+    "line": 3800,
+    "heading": "`Tensor.cpu`",
+    "script": "071_line3800_Tensor.cpu.py",
+    "expected": "071_line3800_Tensor.cpu.expected.txt"
+  },
+  {
+    "id": 72,
+    "line": 3839,
+    "heading": "`Tensor.numpy`",
+    "script": "072_line3839_Tensor.numpy.py",
+    "expected": "072_line3839_Tensor.numpy.expected.txt"
+  },
+  {
+    "id": 73,
+    "line": 3876,
+    "heading": "`Tensor.item`",
+    "script": "073_line3876_Tensor.item.py",
+    "expected": "073_line3876_Tensor.item.expected.txt"
+  },
+  {
+    "id": 74,
+    "line": 3915,
+    "heading": "`Tensor.tolist`",
+    "script": "074_line3915_Tensor.tolist.py",
+    "expected": "074_line3915_Tensor.tolist.expected.txt"
+  },
+  {
+    "id": 75,
+    "line": 3953,
+    "heading": "A.2.2 CPU OP MUSA 环境用例",
+    "script": "075_line3953_A.2.2_CPU_OP_MUSA.py",
+    "expected": "075_line3953_A.2.2_CPU_OP_MUSA.expected.txt"
+  },
+  {
+    "id": 76,
+    "line": 4049,
+    "heading": "`torch.musa.synchronize`",
+    "script": "076_line4049_torch.musa.synchronize.py",
+    "expected": "076_line4049_torch.musa.synchronize.expected.txt"
+  },
+  {
+    "id": 77,
+    "line": 4083,
+    "heading": "A.3.2 Sync OP MUSA 环境用例",
+    "script": "077_line4083_A.3.2_Sync_OP_MUSA.py",
+    "expected": "077_line4083_A.3.2_Sync_OP_MUSA.expected.txt"
+  },
+  {
+    "id": 78,
+    "line": 4159,
+    "heading": "`torch.nonzero`",
+    "script": "078_line4159_torch.nonzero.py",
+    "expected": "078_line4159_torch.nonzero.expected.txt"
+  },
+  {
+    "id": 79,
+    "line": 4195,
+    "heading": "`torch.unique`",
+    "script": "079_line4195_torch.unique.py",
+    "expected": "079_line4195_torch.unique.expected.txt"
+  },
+  {
+    "id": 80,
+    "line": 4230,
+    "heading": "`torch.masked_select`",
+    "script": "080_line4230_torch.masked_select.py",
+    "expected": "080_line4230_torch.masked_select.expected.txt"
+  },
+  {
+    "id": 81,
+    "line": 4325,
+    "heading": "`MUSAGraph.replay`",
+    "script": "081_line4325_MUSAGraph.replay.py",
+    "expected": "081_line4325_MUSAGraph.replay.expected.txt"
+  }
+]
