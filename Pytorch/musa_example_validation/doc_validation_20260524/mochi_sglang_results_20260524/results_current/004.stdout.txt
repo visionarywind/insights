@@ -1,0 +1,4 @@
+page_idx shape=(3,), dtype=int64, device=musa:0, value=[0, 2, 2]
+page_offset shape=(3,), dtype=int64, device=musa:0, value=[1, 0, 1]
+selected shape=(3, 1, 2), dtype=float32, device=musa:0, value=[[[1.0, 1.5]], [[2.0, 2.5]], [[3.0, 3.5]]]
+kv_cache shape=(3, 2, 1, 2), dtype=float32, device=musa:0, value=[[[[0.0, 0.0]], [[1.0, 1.5]]], [[[0.0, 0.0]], [[0.0, 0.0]]], [[[2.0, 2.5]], [[3.0, 3.5]]]]

@@ -1,0 +1,2 @@
+values = Tensor(shape=(3,), dtype=int64, device=musa:0, value=[1, 2, 3])
+indices = Tensor(shape=(3,), dtype=int64, device=musa:0, value=[1, 2, 0])

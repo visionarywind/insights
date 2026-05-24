@@ -1,0 +1,737 @@
+{
+  "total": 81,
+  "match": 80,
+  "mismatch": 1,
+  "missing": 0,
+  "records": [
+    {
+      "id": 1,
+      "line": 629,
+      "heading": "5.1 主要 OP 序列的 MUSA 最小用例",
+      "script": "001_line629_5.1_OP_MUSA.py",
+      "expected": "001_line629_5.1_OP_MUSA.expected.txt",
+      "status": "MATCH",
+      "source": "remote_rerun_results/001.stdout.txt"
+    },
+    {
+      "id": 2,
+      "line": 782,
+      "heading": "5.2 Prefill Metadata 构造最小用例",
+      "script": "002_line782_5.2_Prefill_Metadata.py",
+      "expected": "002_line782_5.2_Prefill_Metadata.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/002.stdout.txt"
+    },
+    {
+      "id": 3,
+      "line": 838,
+      "heading": "5.3 Decode Graph Replay 最小用例",
+      "script": "003_line838_5.3_Decode_Graph_Replay.py",
+      "expected": "003_line838_5.3_Decode_Graph_Replay.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/003.stdout.txt"
+    },
+    {
+      "id": 4,
+      "line": 898,
+      "heading": "5.4 KV Cache 写入最小用例",
+      "script": "004_line898_5.4_KV_Cache.py",
+      "expected": "004_line898_5.4_KV_Cache.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/004.stdout.txt"
+    },
+    {
+      "id": 5,
+      "line": 945,
+      "heading": "5.5 MoE 路由与 Combine 最小用例",
+      "script": "005_line945_5.5_MoE_Combine.py",
+      "expected": "005_line945_5.5_MoE_Combine.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/005.stdout.txt"
+    },
+    {
+      "id": 6,
+      "line": 988,
+      "heading": "5.6 Sampling 后处理最小用例",
+      "script": "006_line988_5.6_Sampling.py",
+      "expected": "006_line988_5.6_Sampling.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/006.stdout.txt"
+    },
+    {
+      "id": 7,
+      "line": 1185,
+      "heading": "普通 Graph 使用样例",
+      "script": "007_line1185_Graph.py",
+      "expected": "007_line1185_Graph.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/007.stdout.txt"
+    },
+    {
+      "id": 8,
+      "line": 1238,
+      "heading": "Piecewise Graph 使用样例",
+      "script": "008_line1238_Piecewise_Graph.py",
+      "expected": "008_line1238_Piecewise_Graph.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/008.stdout.txt"
+    },
+    {
+      "id": 9,
+      "line": 1321,
+      "heading": "torch.compile 使用样例",
+      "script": "009_line1321_torch.compile.py",
+      "expected": "009_line1321_torch.compile.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/009.stdout.txt"
+    },
+    {
+      "id": 10,
+      "line": 1439,
+      "heading": "`torch.empty`",
+      "script": "010_line1439_torch.empty.py",
+      "expected": "010_line1439_torch.empty.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/010.stdout.txt"
+    },
+    {
+      "id": 11,
+      "line": 1477,
+      "heading": "`Tensor.new_empty`",
+      "script": "011_line1477_Tensor.new_empty.py",
+      "expected": "011_line1477_Tensor.new_empty.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/011.stdout.txt"
+    },
+    {
+      "id": 12,
+      "line": 1514,
+      "heading": "`torch.empty_like`",
+      "script": "012_line1514_torch.empty_like.py",
+      "expected": "012_line1514_torch.empty_like.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/012.stdout.txt"
+    },
+    {
+      "id": 13,
+      "line": 1551,
+      "heading": "`torch.zeros`",
+      "script": "013_line1551_torch.zeros.py",
+      "expected": "013_line1551_torch.zeros.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/013.stdout.txt"
+    },
+    {
+      "id": 14,
+      "line": 1585,
+      "heading": "`torch.ones`",
+      "script": "014_line1585_torch.ones.py",
+      "expected": "014_line1585_torch.ones.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/014.stdout.txt"
+    },
+    {
+      "id": 15,
+      "line": 1619,
+      "heading": "`torch.full`",
+      "script": "015_line1619_torch.full.py",
+      "expected": "015_line1619_torch.full.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/015.stdout.txt"
+    },
+    {
+      "id": 16,
+      "line": 1663,
+      "heading": "`Tensor.copy_`",
+      "script": "016_line1663_Tensor.copy.py",
+      "expected": "016_line1663_Tensor.copy.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/016.stdout.txt"
+    },
+    {
+      "id": 17,
+      "line": 1701,
+      "heading": "`torch._foreach_copy_`",
+      "script": "017_line1701_torch._foreach_copy.py",
+      "expected": "017_line1701_torch._foreach_copy.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/017.stdout.txt"
+    },
+    {
+      "id": 18,
+      "line": 1745,
+      "heading": "`Tensor.fill_`",
+      "script": "018_line1745_Tensor.fill.py",
+      "expected": "018_line1745_Tensor.fill.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/018.stdout.txt"
+    },
+    {
+      "id": 19,
+      "line": 1780,
+      "heading": "`Tensor.zero_`",
+      "script": "019_line1780_Tensor.zero.py",
+      "expected": "019_line1780_Tensor.zero.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/019.stdout.txt"
+    },
+    {
+      "id": 20,
+      "line": 1815,
+      "heading": "`Tensor.masked_fill_`",
+      "script": "020_line1815_Tensor.masked_fill.py",
+      "expected": "020_line1815_Tensor.masked_fill.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/020.stdout.txt"
+    },
+    {
+      "id": 21,
+      "line": 1867,
+      "heading": "`Tensor.view`",
+      "script": "021_line1867_Tensor.view.py",
+      "expected": "021_line1867_Tensor.view.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/021.stdout.txt"
+    },
+    {
+      "id": 22,
+      "line": 1904,
+      "heading": "`Tensor.reshape`",
+      "script": "022_line1904_Tensor.reshape.py",
+      "expected": "022_line1904_Tensor.reshape.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/022.stdout.txt"
+    },
+    {
+      "id": 23,
+      "line": 1943,
+      "heading": "`Tensor.flatten`",
+      "script": "023_line1943_Tensor.flatten.py",
+      "expected": "023_line1943_Tensor.flatten.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/023.stdout.txt"
+    },
+    {
+      "id": 24,
+      "line": 1980,
+      "heading": "`Tensor.unsqueeze`",
+      "script": "024_line1980_Tensor.unsqueeze.py",
+      "expected": "024_line1980_Tensor.unsqueeze.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/024.stdout.txt"
+    },
+    {
+      "id": 25,
+      "line": 2017,
+      "heading": "`Tensor.squeeze`",
+      "script": "025_line2017_Tensor.squeeze.py",
+      "expected": "025_line2017_Tensor.squeeze.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/025.stdout.txt"
+    },
+    {
+      "id": 26,
+      "line": 2056,
+      "heading": "`Tensor.expand`",
+      "script": "026_line2056_Tensor.expand.py",
+      "expected": "026_line2056_Tensor.expand.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/026.stdout.txt"
+    },
+    {
+      "id": 27,
+      "line": 2095,
+      "heading": "`Tensor.contiguous`",
+      "script": "027_line2095_Tensor.contiguous.py",
+      "expected": "027_line2095_Tensor.contiguous.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/027.stdout.txt"
+    },
+    {
+      "id": 28,
+      "line": 2132,
+      "heading": "`Tensor.stride`",
+      "script": "028_line2132_Tensor.stride.py",
+      "expected": "028_line2132_Tensor.stride.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/028.stdout.txt"
+    },
+    {
+      "id": 29,
+      "line": 2169,
+      "heading": "`Tensor.is_contiguous`",
+      "script": "029_line2169_Tensor.is_contiguous.py",
+      "expected": "029_line2169_Tensor.is_contiguous.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/029.stdout.txt"
+    },
+    {
+      "id": 30,
+      "line": 2206,
+      "heading": "`Tensor.storage_offset`",
+      "script": "030_line2206_Tensor.storage_offset.py",
+      "expected": "030_line2206_Tensor.storage_offset.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/030.stdout.txt"
+    },
+    {
+      "id": 31,
+      "line": 2253,
+      "heading": "Slice",
+      "script": "031_line2253_Slice.py",
+      "expected": "031_line2253_Slice.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/031.stdout.txt"
+    },
+    {
+      "id": 32,
+      "line": 2290,
+      "heading": "Advanced indexing",
+      "script": "032_line2290_Advanced_indexing.py",
+      "expected": "032_line2290_Advanced_indexing.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/032.stdout.txt"
+    },
+    {
+      "id": 33,
+      "line": 2333,
+      "heading": "`torch.gather`",
+      "script": "033_line2333_torch.gather.py",
+      "expected": "033_line2333_torch.gather.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/033.stdout.txt"
+    },
+    {
+      "id": 34,
+      "line": 2373,
+      "heading": "`torch.take_along_dim`",
+      "script": "034_line2373_torch.take_along_dim.py",
+      "expected": "034_line2373_torch.take_along_dim.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/034.stdout.txt"
+    },
+    {
+      "id": 35,
+      "line": 2413,
+      "heading": "`torch.index_select`",
+      "script": "035_line2413_torch.index_select.py",
+      "expected": "035_line2413_torch.index_select.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/035.stdout.txt"
+    },
+    {
+      "id": 36,
+      "line": 2453,
+      "heading": "`Tensor.scatter_`",
+      "script": "036_line2453_Tensor.scatter.py",
+      "expected": "036_line2453_Tensor.scatter.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/036.stdout.txt"
+    },
+    {
+      "id": 37,
+      "line": 2494,
+      "heading": "`Tensor.tensor_split`",
+      "script": "037_line2494_Tensor.tensor_split.py",
+      "expected": "037_line2494_Tensor.tensor_split.expected.txt",
+      "status": "MISMATCH",
+      "source": "remote_rerun_results/037.stdout.txt"
+    },
+    {
+      "id": 38,
+      "line": 2540,
+      "heading": "`torch.arange`",
+      "script": "038_line2540_torch.arange.py",
+      "expected": "038_line2540_torch.arange.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/038.stdout.txt"
+    },
+    {
+      "id": 39,
+      "line": 2574,
+      "heading": "`torch.arange(..., out=out)`",
+      "script": "039_line2574_torch.arange_..._out_out.py",
+      "expected": "039_line2574_torch.arange_..._out_out.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/039.stdout.txt"
+    },
+    {
+      "id": 40,
+      "line": 2609,
+      "heading": "`repeat_interleave`",
+      "script": "040_line2609_repeat_interleave.py",
+      "expected": "040_line2609_repeat_interleave.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/040.stdout.txt"
+    },
+    {
+      "id": 41,
+      "line": 2652,
+      "heading": "`torch.cat`",
+      "script": "041_line2652_torch.cat.py",
+      "expected": "041_line2652_torch.cat.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/041.stdout.txt"
+    },
+    {
+      "id": 42,
+      "line": 2692,
+      "heading": "`torch.stack`",
+      "script": "042_line2692_torch.stack.py",
+      "expected": "042_line2692_torch.stack.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/042.stdout.txt"
+    },
+    {
+      "id": 43,
+      "line": 2732,
+      "heading": "`torch.nn.functional.pad`",
+      "script": "043_line2732_torch.nn.functional.pad.py",
+      "expected": "043_line2732_torch.nn.functional.pad.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/043.stdout.txt"
+    },
+    {
+      "id": 44,
+      "line": 2771,
+      "heading": "`torch.where`",
+      "script": "044_line2771_torch.where.py",
+      "expected": "044_line2771_torch.where.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/044.stdout.txt"
+    },
+    {
+      "id": 45,
+      "line": 2816,
+      "heading": "`sum`",
+      "script": "045_line2816_sum.py",
+      "expected": "045_line2816_sum.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/045.stdout.txt"
+    },
+    {
+      "id": 46,
+      "line": 2853,
+      "heading": "`mean`",
+      "script": "046_line2853_mean.py",
+      "expected": "046_line2853_mean.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/046.stdout.txt"
+    },
+    {
+      "id": 47,
+      "line": 2890,
+      "heading": "`amax`",
+      "script": "047_line2890_amax.py",
+      "expected": "047_line2890_amax.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/047.stdout.txt"
+    },
+    {
+      "id": 48,
+      "line": 2927,
+      "heading": "`min` / `max`",
+      "script": "048_line2927_min_max.py",
+      "expected": "048_line2927_min_max.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/048.stdout.txt"
+    },
+    {
+      "id": 49,
+      "line": 2967,
+      "heading": "`abs`",
+      "script": "049_line2967_abs.py",
+      "expected": "049_line2967_abs.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/049.stdout.txt"
+    },
+    {
+      "id": 50,
+      "line": 3001,
+      "heading": "`square`",
+      "script": "050_line3001_square.py",
+      "expected": "050_line3001_square.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/050.stdout.txt"
+    },
+    {
+      "id": 51,
+      "line": 3035,
+      "heading": "`rsqrt`",
+      "script": "051_line3035_rsqrt.py",
+      "expected": "051_line3035_rsqrt.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/051.stdout.txt"
+    },
+    {
+      "id": 52,
+      "line": 3069,
+      "heading": "`sigmoid`",
+      "script": "052_line3069_sigmoid.py",
+      "expected": "052_line3069_sigmoid.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/052.stdout.txt"
+    },
+    {
+      "id": 53,
+      "line": 3103,
+      "heading": "`silu`",
+      "script": "053_line3103_silu.py",
+      "expected": "053_line3103_silu.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/053.stdout.txt"
+    },
+    {
+      "id": 54,
+      "line": 3137,
+      "heading": "`gelu`",
+      "script": "054_line3137_gelu.py",
+      "expected": "054_line3137_gelu.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/054.stdout.txt"
+    },
+    {
+      "id": 55,
+      "line": 3171,
+      "heading": "`relu`",
+      "script": "055_line3171_relu.py",
+      "expected": "055_line3171_relu.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/055.stdout.txt"
+    },
+    {
+      "id": 56,
+      "line": 3205,
+      "heading": "`softmax`",
+      "script": "056_line3205_softmax.py",
+      "expected": "056_line3205_softmax.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/056.stdout.txt"
+    },
+    {
+      "id": 57,
+      "line": 3239,
+      "heading": "`clamp`",
+      "script": "057_line3239_clamp.py",
+      "expected": "057_line3239_clamp.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/057.stdout.txt"
+    },
+    {
+      "id": 58,
+      "line": 3283,
+      "heading": "`torch.nn.functional.linear`",
+      "script": "058_line3283_torch.nn.functional.linear.py",
+      "expected": "058_line3283_torch.nn.functional.linear.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/058.stdout.txt"
+    },
+    {
+      "id": 59,
+      "line": 3326,
+      "heading": "`matmul`",
+      "script": "059_line3326_matmul.py",
+      "expected": "059_line3326_matmul.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/059.stdout.txt"
+    },
+    {
+      "id": 60,
+      "line": 3366,
+      "heading": "`mm`",
+      "script": "060_line3366_mm.py",
+      "expected": "060_line3366_mm.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/060.stdout.txt"
+    },
+    {
+      "id": 61,
+      "line": 3406,
+      "heading": "`bmm`",
+      "script": "061_line3406_bmm.py",
+      "expected": "061_line3406_bmm.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/061.stdout.txt"
+    },
+    {
+      "id": 62,
+      "line": 3446,
+      "heading": "`einsum`",
+      "script": "062_line3446_einsum.py",
+      "expected": "062_line3446_einsum.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/062.stdout.txt"
+    },
+    {
+      "id": 63,
+      "line": 3486,
+      "heading": "`topk`",
+      "script": "063_line3486_topk.py",
+      "expected": "063_line3486_topk.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/063.stdout.txt"
+    },
+    {
+      "id": 64,
+      "line": 3525,
+      "heading": "`sort`",
+      "script": "064_line3525_sort.py",
+      "expected": "064_line3525_sort.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/064.stdout.txt"
+    },
+    {
+      "id": 65,
+      "line": 3561,
+      "heading": "`argsort`",
+      "script": "065_line3561_argsort.py",
+      "expected": "065_line3561_argsort.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/065.stdout.txt"
+    },
+    {
+      "id": 66,
+      "line": 3595,
+      "heading": "`argmax`",
+      "script": "066_line3595_argmax.py",
+      "expected": "066_line3595_argmax.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/066.stdout.txt"
+    },
+    {
+      "id": 67,
+      "line": 3637,
+      "heading": "`Tensor.to(dtype)`",
+      "script": "067_line3637_Tensor.to_dtype.py",
+      "expected": "067_line3637_Tensor.to_dtype.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/067.stdout.txt"
+    },
+    {
+      "id": 68,
+      "line": 3674,
+      "heading": "`Tensor.to(device)`",
+      "script": "068_line3674_Tensor.to_device.py",
+      "expected": "068_line3674_Tensor.to_device.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/068.stdout.txt"
+    },
+    {
+      "id": 69,
+      "line": 3711,
+      "heading": "`Tensor.float`",
+      "script": "069_line3711_Tensor.float.py",
+      "expected": "069_line3711_Tensor.float.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/069.stdout.txt"
+    },
+    {
+      "id": 70,
+      "line": 3748,
+      "heading": "`Tensor.bfloat16`",
+      "script": "070_line3748_Tensor.bfloat16.py",
+      "expected": "070_line3748_Tensor.bfloat16.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/070.stdout.txt"
+    },
+    {
+      "id": 71,
+      "line": 3813,
+      "heading": "`Tensor.cpu`",
+      "script": "071_line3813_Tensor.cpu.py",
+      "expected": "071_line3813_Tensor.cpu.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/071.stdout.txt"
+    },
+    {
+      "id": 72,
+      "line": 3852,
+      "heading": "`Tensor.numpy`",
+      "script": "072_line3852_Tensor.numpy.py",
+      "expected": "072_line3852_Tensor.numpy.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/072.stdout.txt"
+    },
+    {
+      "id": 73,
+      "line": 3889,
+      "heading": "`Tensor.item`",
+      "script": "073_line3889_Tensor.item.py",
+      "expected": "073_line3889_Tensor.item.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/073.stdout.txt"
+    },
+    {
+      "id": 74,
+      "line": 3928,
+      "heading": "`Tensor.tolist`",
+      "script": "074_line3928_Tensor.tolist.py",
+      "expected": "074_line3928_Tensor.tolist.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/074.stdout.txt"
+    },
+    {
+      "id": 75,
+      "line": 3966,
+      "heading": "A.2.2 CPU OP MUSA 环境用例",
+      "script": "075_line3966_A.2.2_CPU_OP_MUSA.py",
+      "expected": "075_line3966_A.2.2_CPU_OP_MUSA.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/075.stdout.txt"
+    },
+    {
+      "id": 76,
+      "line": 4066,
+      "heading": "`torch.musa.synchronize`",
+      "script": "076_line4066_torch.musa.synchronize.py",
+      "expected": "076_line4066_torch.musa.synchronize.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/076.stdout.txt"
+    },
+    {
+      "id": 77,
+      "line": 4100,
+      "heading": "A.3.2 Sync OP MUSA 环境用例",
+      "script": "077_line4100_A.3.2_Sync_OP_MUSA.py",
+      "expected": "077_line4100_A.3.2_Sync_OP_MUSA.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/077.stdout.txt"
+    },
+    {
+      "id": 78,
+      "line": 4182,
+      "heading": "`torch.nonzero`",
+      "script": "078_line4182_torch.nonzero.py",
+      "expected": "078_line4182_torch.nonzero.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/078.stdout.txt"
+    },
+    {
+      "id": 79,
+      "line": 4219,
+      "heading": "`torch.unique`",
+      "script": "079_line4219_torch.unique.py",
+      "expected": "079_line4219_torch.unique.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/079.stdout.txt"
+    },
+    {
+      "id": 80,
+      "line": 4255,
+      "heading": "`torch.masked_select`",
+      "script": "080_line4255_torch.masked_select.py",
+      "expected": "080_line4255_torch.masked_select.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/080.stdout.txt"
+    },
+    {
+      "id": 81,
+      "line": 4361,
+      "heading": "`MUSAGraph.replay`",
+      "script": "081_line4361_MUSAGraph.replay.py",
+      "expected": "081_line4361_MUSAGraph.replay.expected.txt",
+      "status": "MATCH",
+      "source": "remote_results/081.stdout.txt"
+    }
+  ]
+}
