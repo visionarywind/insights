@@ -59,6 +59,31 @@ def print_avg_calculation(indent, title, vectors, result):
         print(f"{indent}  {line}")
 
 
+def print_local_window_calculation(indent, position, window_size, start, window):
+    """Print how the local sliding window is selected."""
+    print(f"{indent}local window selection:")
+    print(
+        f"{indent}  start = max(0, position - window_size + 1) = "
+        f"max(0, {position} - {window_size} + 1) = {start}"
+    )
+    print(f"{indent}  window = tokens {start}-{position}")
+    print(f"{indent}  window values = {fmt_vectors(window)}")
+
+
+def print_visible_entries_calculation(indent, name, position, compress_rate, visible_count, visible):
+    """Print why a token can see a set of compressed entries."""
+    print(f"{indent}visible {name} entry selection:")
+    print(
+        f"{indent}  visible_count = (position + 1) // compress_rate = "
+        f"({position} + 1) // {compress_rate} = {visible_count}"
+    )
+    if visible_count == 0:
+        print(f"{indent}  no completed compressed entry is visible")
+    else:
+        print(f"{indent}  visible entries = entry0-entry{visible_count - 1}")
+        print(f"{indent}  entry values = {fmt_vectors(visible)}")
+
+
 def weighted_sum_component_details(items, result):
     """Return per-dimension arithmetic for sum(weight * vector)."""
     details = []
@@ -275,7 +300,11 @@ def trace_mhc_mix_back(title, old_streams, sublayer_output):
 
 
 def local_context(hidden_states, position, window_size=2):
-    """模拟 sliding window attention 的局部上下文。"""
+    """模拟 sliding window attention 的局部上下文。
+
+    window_size=2 时，position=2 的窗口起点是
+    max(0, 2 - 2 + 1) = 1，因此窗口是 token1-token2。
+    """
     start = max(0, position - window_size + 1)
     return start, hidden_states[start : position + 1], avg(hidden_states[start : position + 1])
 
@@ -307,12 +336,14 @@ def sliding_attention(hidden_states):
 
     output = []
     for position in range(len(hidden_states)):
-        start, window, local = local_context(hidden_states, position)
+        window_size = 2
+        start, window, local = local_context(hidden_states, position, window_size=window_size)
         output.append(local)
         print(
             f"    token {position}: window=tokens {start}-{position}, "
             f"values={fmt_vectors(window)} -> local_avg={fmt_vec(local)} -> out={fmt_vec(local)}"
         )
+        print_local_window_calculation("      ", position, window_size, start, window)
         print_avg_calculation("      ", "local_avg calculation:", window, local)
     return output
 
@@ -331,7 +362,8 @@ def hca_attention(hidden_states, compress_rate=2):
 
     output = []
     for position in range(len(hidden_states)):
-        start, window, local = local_context(hidden_states, position)
+        window_size = 2
+        start, window, local = local_context(hidden_states, position, window_size=window_size)
         visible_count = (position + 1) // compress_rate
         visible = compressed[:visible_count]
 
@@ -340,8 +372,10 @@ def hca_attention(hidden_states, compress_rate=2):
             out = avg([local, long_context])
             print(f"    token {position}:")
             print(f"      local window=tokens {start}-{position}, values={fmt_vectors(window)}, local={fmt_vec(local)}")
+            print_local_window_calculation("        ", position, window_size, start, window)
             print_avg_calculation("        ", "local calculation:", window, local)
             print(f"      visible HCA entries=entry0-entry{visible_count - 1}, context={fmt_vec(long_context)}")
+            print_visible_entries_calculation("        ", "HCA", position, compress_rate, visible_count, visible)
             print_avg_calculation("        ", "compressed context calculation:", visible, long_context)
             print(f"      out=avg(local, context)={fmt_vec(out)}")
             print_avg_calculation("        ", "output calculation:", [local, long_context], out)
@@ -349,8 +383,10 @@ def hca_attention(hidden_states, compress_rate=2):
             out = local
             print(f"    token {position}:")
             print(f"      local window=tokens {start}-{position}, values={fmt_vectors(window)}, local={fmt_vec(local)}")
+            print_local_window_calculation("        ", position, window_size, start, window)
             print_avg_calculation("        ", "local calculation:", window, local)
             print("      visible HCA entries=none")
+            print_visible_entries_calculation("        ", "HCA", position, compress_rate, visible_count, visible)
             print(f"      out=local={fmt_vec(out)}")
         output.append(out)
     return output
@@ -371,14 +407,17 @@ def csa_attention(hidden_states, compress_rate=2):
 
     output = []
     for position, query in enumerate(hidden_states):
-        start, window, local = local_context(hidden_states, position)
+        window_size = 2
+        start, window, local = local_context(hidden_states, position, window_size=window_size)
         visible_count = (position + 1) // compress_rate
         visible = compressed[:visible_count]
 
         print(f"    token {position}:")
         print(f"      query={fmt_vec(query)}")
         print(f"      local window=tokens {start}-{position}, values={fmt_vectors(window)}, local={fmt_vec(local)}")
+        print_local_window_calculation("        ", position, window_size, start, window)
         print_avg_calculation("        ", "local calculation:", window, local)
+        print_visible_entries_calculation("        ", "CSA", position, compress_rate, visible_count, visible)
 
         if not visible:
             output.append(local)
@@ -394,6 +433,7 @@ def csa_attention(hidden_states, compress_rate=2):
         for entry_idx, (entry, score) in enumerate(zip(visible, scores)):
             print(f"      indexer score: dot(query, entry{entry_idx}={fmt_vec(entry)}) = {fmt_num(score)}")
             print(f"        calculation: {dot_detail(query, entry, score)}")
+        print(f"      selected entry calculation: argmax({fmt_vec(scores)}) = entry{selected_idx}")
         print(f"      selected entry={selected_idx}, selected_value={fmt_vec(selected_entry)}")
         print(f"      out=avg(local, selected_entry)={fmt_vec(out)}")
         print_avg_calculation("        ", "output calculation:", [local, selected_entry], out)
