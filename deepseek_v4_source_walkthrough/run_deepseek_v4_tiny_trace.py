@@ -42,6 +42,38 @@ def fmt_vectors(vectors):
     return "[" + ", ".join(fmt_vec(vector) for vector in vectors) + "]"
 
 
+def avg_component_details(vectors, result):
+    """Return per-dimension arithmetic for an average over vectors."""
+    details = []
+    size = len(vectors)
+    for dim_idx in range(len(result)):
+        terms = " + ".join(fmt_num(vector[dim_idx]) for vector in vectors)
+        details.append(f"dim{dim_idx}: ({terms}) / {size} = {fmt_num(result[dim_idx])}")
+    return details
+
+
+def print_avg_calculation(indent, title, vectors, result):
+    """Print the arithmetic behind an average operation."""
+    print(f"{indent}{title}")
+    for line in avg_component_details(vectors, result):
+        print(f"{indent}  {line}")
+
+
+def weighted_sum_component_details(items, result):
+    """Return per-dimension arithmetic for sum(weight * vector)."""
+    details = []
+    for dim_idx in range(len(result)):
+        terms = " + ".join(f"{fmt_num(weight)}*{fmt_num(vector[dim_idx])}" for vector, weight in items)
+        details.append(f"dim{dim_idx}: {terms} = {fmt_num(result[dim_idx])}")
+    return details
+
+
+def dot_detail(a, b, result):
+    """Return arithmetic for a dot product."""
+    terms = " + ".join(f"{fmt_num(x)}*{fmt_num(y)}" for x, y in zip(a, b))
+    return f"{terms} = {fmt_num(result)}"
+
+
 def add(a, b):
     return [x + y for x, y in zip(a, b)]
 
@@ -194,6 +226,7 @@ def trace_mhc_collapse(title, streams):
         vector = avg(token_streams)
         collapsed.append(vector)
         print(f"  token {token_idx}: avg({fmt_vectors(token_streams)}) = {fmt_vec(vector)}")
+        print_avg_calculation("    ", "component calculation:", token_streams, vector)
     print()
     return collapsed
 
@@ -226,7 +259,17 @@ def trace_mhc_mix_back(title, old_streams, sublayer_output):
         print(f"    old stream0={fmt_vec(old[0])}, old stream1={fmt_vec(old[1])}")
         print(f"    sublayer_output={fmt_vec(output)}")
         print(f"    new stream0={fmt_vec(new[0])}")
+        for dim_idx, value in enumerate(new[0]):
+            print(
+                f"      dim{dim_idx}: 0.7*{fmt_num(old[0][dim_idx])} + "
+                f"0.3*{fmt_num(output[dim_idx])} = {fmt_num(value)}"
+            )
         print(f"    new stream1={fmt_vec(new[1])}")
+        for dim_idx, value in enumerate(new[1]):
+            print(
+                f"      dim{dim_idx}: 0.4*{fmt_num(old[1][dim_idx])} + "
+                f"0.6*{fmt_num(output[dim_idx])} = {fmt_num(value)}"
+            )
     print()
     return mixed
 
@@ -247,6 +290,7 @@ def compress_windows(hidden_states, compress_rate, name):
         summary = avg(window)
         compressed.append(summary)
         print(f"      tokens {start}-{end - 1}: avg({fmt_vectors(window)}) = entry{len(compressed) - 1} {fmt_vec(summary)}")
+        print_avg_calculation("        ", "component calculation:", window, summary)
     return compressed
 
 
@@ -269,6 +313,7 @@ def sliding_attention(hidden_states):
             f"    token {position}: window=tokens {start}-{position}, "
             f"values={fmt_vectors(window)} -> local_avg={fmt_vec(local)} -> out={fmt_vec(local)}"
         )
+        print_avg_calculation("      ", "local_avg calculation:", window, local)
     return output
 
 
@@ -295,12 +340,16 @@ def hca_attention(hidden_states, compress_rate=2):
             out = avg([local, long_context])
             print(f"    token {position}:")
             print(f"      local window=tokens {start}-{position}, values={fmt_vectors(window)}, local={fmt_vec(local)}")
+            print_avg_calculation("        ", "local calculation:", window, local)
             print(f"      visible HCA entries=entry0-entry{visible_count - 1}, context={fmt_vec(long_context)}")
+            print_avg_calculation("        ", "compressed context calculation:", visible, long_context)
             print(f"      out=avg(local, context)={fmt_vec(out)}")
+            print_avg_calculation("        ", "output calculation:", [local, long_context], out)
         else:
             out = local
             print(f"    token {position}:")
             print(f"      local window=tokens {start}-{position}, values={fmt_vectors(window)}, local={fmt_vec(local)}")
+            print_avg_calculation("        ", "local calculation:", window, local)
             print("      visible HCA entries=none")
             print(f"      out=local={fmt_vec(out)}")
         output.append(out)
@@ -329,6 +378,7 @@ def csa_attention(hidden_states, compress_rate=2):
         print(f"    token {position}:")
         print(f"      query={fmt_vec(query)}")
         print(f"      local window=tokens {start}-{position}, values={fmt_vectors(window)}, local={fmt_vec(local)}")
+        print_avg_calculation("        ", "local calculation:", window, local)
 
         if not visible:
             output.append(local)
@@ -343,8 +393,10 @@ def csa_attention(hidden_states, compress_rate=2):
 
         for entry_idx, (entry, score) in enumerate(zip(visible, scores)):
             print(f"      indexer score: dot(query, entry{entry_idx}={fmt_vec(entry)}) = {fmt_num(score)}")
+            print(f"        calculation: {dot_detail(query, entry, score)}")
         print(f"      selected entry={selected_idx}, selected_value={fmt_vec(selected_entry)}")
         print(f"      out=avg(local, selected_entry)={fmt_vec(out)}")
+        print_avg_calculation("        ", "output calculation:", [local, selected_entry], out)
         output.append(out)
     return output
 
@@ -408,10 +460,31 @@ def moe_block(hidden_states):
         expert_items = []
         print(f"    token {token_idx}: input={fmt_vec(vector)}")
         print(f"      router_scores={fmt_vec(router_scores)}")
+        print(f"        expert0 score = x = {fmt_num(x)}")
+        print(f"        expert1 score = y = {fmt_num(y)}")
+        print(
+            f"        expert2 score = 0.5 * (x + y) = "
+            f"0.5 * ({fmt_num(x)} + {fmt_num(y)}) = {fmt_num(router_scores[2])}"
+        )
+        print(f"      selected experts={selected}, selected_scores={fmt_vec(selected_scores)}")
+        print(f"      selected score sum={fmt_num(score_sum)}")
         for expert_id, weight in zip(selected, weights):
             expert_vec = expert_output(expert_id, vector)
             expert_items.append((expert_vec, weight))
             print(f"      selected expert{expert_id}: weight={fmt_num(weight)}, output={fmt_vec(expert_vec)}")
+            print(
+                f"        weight calculation: score / score_sum = "
+                f"{fmt_num(router_scores[expert_id])} / {fmt_num(score_sum)} = {fmt_num(weight)}"
+            )
+            if expert_id == 0:
+                print(f"        output dim0: 1.4 * x = 1.4 * {fmt_num(x)} = {fmt_num(expert_vec[0])}")
+                print(f"        output dim1: 0.7 * y = 0.7 * {fmt_num(y)} = {fmt_num(expert_vec[1])}")
+            elif expert_id == 1:
+                print(f"        output dim0: 0.7 * x = 0.7 * {fmt_num(x)} = {fmt_num(expert_vec[0])}")
+                print(f"        output dim1: 1.4 * y = 1.4 * {fmt_num(y)} = {fmt_num(expert_vec[1])}")
+            else:
+                print(f"        output dim0: 1.1 * x = 1.1 * {fmt_num(x)} = {fmt_num(expert_vec[0])}")
+                print(f"        output dim1: 1.1 * y = 1.1 * {fmt_num(y)} = {fmt_num(expert_vec[1])}")
 
         routed = weighted_sum(expert_items)
         shared = scale(vector, 0.2)
@@ -419,8 +492,14 @@ def moe_block(hidden_states):
         output.append(combined)
 
         print(f"      routed weighted sum={fmt_vec(routed)}")
+        for line in weighted_sum_component_details(expert_items, routed):
+            print(f"        {line}")
         print(f"      shared expert output={fmt_vec(shared)}")
+        for dim_idx, value in enumerate(shared):
+            print(f"        dim{dim_idx}: 0.2*{fmt_num(vector[dim_idx])} = {fmt_num(value)}")
         print(f"      MoE output={fmt_vec(combined)}")
+        for dim_idx, value in enumerate(combined):
+            print(f"        dim{dim_idx}: {fmt_num(routed[dim_idx])} + {fmt_num(shared[dim_idx])} = {fmt_num(value)}")
     return output
 
 
@@ -443,6 +522,12 @@ def lm_head(hidden_states):
         scores = [x, y, 0.3 * x + 0.7 * y]
         logits.append(scores)
         print(f"  token {token_idx}: hidden={fmt_vec(vector)} -> logits={fmt_vec(scores)}")
+        print(f"    score(A) = x = {fmt_num(x)}")
+        print(f"    score(B) = y = {fmt_num(y)}")
+        print(
+            f"    score(C) = 0.3*x + 0.7*y = "
+            f"0.3*{fmt_num(x)} + 0.7*{fmt_num(y)} = {fmt_num(scores[2])}"
+        )
     return logits
 
 

@@ -1,25 +1,27 @@
-# DeepSeek-V4 入门源码解读
+# DeepSeek-V4 源码解读
 
-如果这一版还是看不懂，先读同目录下的 [`00_start_here.md`](00_start_here.md)。那份是零基础版，只解释“每一步在干什么”，不解释公式和论文名词。
+建议阅读顺序：
 
-如果还需要看具体数字，读 [`01_minimal_numeric_example.md`](01_minimal_numeric_example.md)，里面有一个最小可执行脚本和完整运行结果。
+1. [`00_start_here.md`](00_start_here.md)：按执行顺序解释核心模块。
+2. [`01_minimal_numeric_example.md`](01_minimal_numeric_example.md)：提供最小数值示例和运行结果。
+3. [`02_deepseek_v4_source_module_execution.md`](02_deepseek_v4_source_module_execution.md)：对照 `repos/transformers` 中的真实源码，分析 `DeepseekV4ForCausalLM`、`DeepseekV4Model`、`DeepseekV4DecoderLayer`、Attention、HCA、CSA、Indexer、mHC、MoE 和 `lm_head` 的执行流程。
 
-同目录还有一个不依赖 PyTorch/Transformers 的玩具脚本：
+同目录提供一个不依赖 PyTorch/Transformers 的流程模拟脚本：
 
 ```bash
 cd /home/mtuser/workspace
-python insights/deepseek_v4_source_walkthrough/toy_flow_no_torch.py
+python insights/deepseek_v4_source_walkthrough/run_deepseek_v4_tiny_trace.py
 ```
 
-它只打印形状和流程，适合先建立直觉。
+它输出形状、关键中间值和模块执行顺序，便于和源码分析对照。
 
-这份说明面向第一次读 Transformer 源码的读者。目标不是推公式，而是回答三个问题：
+这份说明面向第一次阅读 Transformer 源码的读者，重点回答三个问题：
 
 1. 一串 token 输入模型后，数据按什么顺序流动？
 2. DeepSeek-V4 比普通 decoder-only Transformer 多了哪些关键模块？
 3. 用很小的配置跑一次 forward 时，每个模块会看到什么形状的张量？
 
-## 先记住三句话
+## 核心结构
 
 DeepSeek-V4 仍然是 decoder-only 语言模型：输入 token，输出每个位置预测下一个 token 的 logits。
 
@@ -29,7 +31,7 @@ DeepSeek-V4 仍然是 decoder-only 语言模型：输入 token，输出每个位
 - **mHC 残差流**：不是一条残差线，而是 `hc_mult` 条并行残差流。
 - **MoE 前馈层**：每个 token 只走少数几个专家，同时还有一个共享 MLP。
 
-可以先把它想成下面这条流水线：
+完整执行路径如下：
 
 ```text
 input_ids
@@ -134,7 +136,7 @@ collapsed.shape = [B, S, D]
 hidden_streams.shape = [B, S, hc_mult, D]
 ```
 
-## 关键模块通俗注释
+## 关键模块说明
 
 ### 配置：DeepseekV4Config
 
@@ -328,7 +330,7 @@ V4 的 mHC 更像：
   -> 算 comb：多条旧残差流之间怎么互相混合
 ```
 
-其中 `comb` 会经过 Sinkhorn 归一化，让矩阵接近“双随机矩阵”。小白可以先把它理解成：模型学习了一种更稳的残差混合方式，而不是简单地 `x + y`。
+其中 `comb` 会经过 Sinkhorn 归一化，使矩阵接近“双随机矩阵”。实际作用是让模型学习残差流之间的稳定混合方式，而不是直接执行 `x + y`。
 
 ### MoE：每个 token 只走少数专家
 
@@ -368,7 +370,7 @@ cd /home/mtuser/workspace
 python insights/deepseek_v4_source_walkthrough/run_deepseek_v4_tiny_trace.py
 ```
 
-这个脚本不依赖 Transformers、PyTorch、DeepSeek 权重或 GPU。它使用 4 个 token、2 维向量和 3 层简化模块，完整模拟一次 DeepSeekV4 风格的执行流程。
+这个脚本不依赖 Transformers、PyTorch、DeepSeek 权重或 GPU。它使用 4 个 token、2 维向量和 3 层简化模块，模拟一次 DeepSeekV4 风格的执行流程。
 
 ```text
 input_ids -> embedding -> mHC residual streams
@@ -409,7 +411,7 @@ lm_head logits
 
 ## 推荐阅读顺序
 
-第一次读源码时，不要从文件顶部一路读到底。按下面顺序更容易：
+第一次阅读源码时，建议按下面顺序定位：
 
 1. 读 `DeepseekV4Model.forward`：建立整体流水线。
 2. 读 `DeepseekV4DecoderLayer.forward`：理解一层里 attention 和 MoE 怎么接。
