@@ -504,7 +504,7 @@ prefill 和 decode 的热点不同：
 | prefill | 一次输入多个 prompt token | 当前 token 之间做 causal attention，并写入 KV cache | GEMM、attention 带宽、KV cache 初始化 |
 | decode | 每步新增一个 token | 新 query 读取历史 KV cache，追加当前 K/V | kernel launch、Graph replay、KV cache 访问、CPU 同步边界 |
 
-### 3.1 `LlamaModel.forward`
+### 4.1 `LlamaModel.forward`
 
 源码位置：
 
@@ -581,7 +581,7 @@ probs = tensor([[1.0000, 0.0000, 0.0000],
                 [0.2693, 0.3289, 0.4018]])
 ```
 
-### 3.2 `LlamaDecoderLayer.forward`
+### 4.2 `LlamaDecoderLayer.forward`
 
 源码位置：
 
@@ -625,7 +625,7 @@ hidden_states = residual + hidden_states
 | Residual | `add` | 保留原始信息，稳定深层网络 |
 | MLP | `linear`、`silu`、`mul`、`linear` | token 内非线性变换 |
 
-### 3.3 `LlamaAttention.forward`
+### 4.3 `LlamaAttention.forward`
 
 源码位置：
 
@@ -704,7 +704,7 @@ shape 转换：
   -> [B,H,S,Dh]
 ```
 
-### 3.4 `LlamaMLP.forward`
+### 4.4 `LlamaMLP.forward`
 
 源码位置：
 
@@ -747,7 +747,7 @@ print("mix =", mix)
 mix = tensor([[ 1.4621, -0.8068]])
 ```
 
-### 3.5 `LlamaForCausalLM.forward`
+### 4.5 `LlamaForCausalLM.forward`
 
 源码位置：
 
@@ -785,7 +785,7 @@ DeepSeek V4 在经典 decoder 结构上增加三类关键机制：
 | 压缩注意力 | `DeepseekV4HCACompressor`、`DeepseekV4CSACompressor`、`DeepseekV4Indexer` | `view`、`softmax`、`sum`、`matmul`、`topk`、`scatter_` | 将历史 token 压缩为 compressed KV，并按 query 选择摘要 |
 | MoE | `DeepseekV4SparseMoeBlock`、router、experts | `topk`、`gather`、`one_hot`、`where`、`linear`、`index_add_` | token 选择专家，专家计算后合并回 token 位置 |
 
-### 4.1 `DeepseekV4Model.forward`
+### 5.1 `DeepseekV4Model.forward`
 
 主线：
 
@@ -805,7 +805,7 @@ input_ids
 - 进入 attention 或 MoE 前，需要由 mHC 折叠为普通 `[B, S, D]`。
 - 输出后再按 mHC 权重写回多条 residual stream。
 
-### 4.2 `DeepseekV4HyperConnection`
+### 5.2 `DeepseekV4HyperConnection`
 
 mHC 负责两类操作：
 
@@ -884,7 +884,7 @@ attn_hc -> input_layernorm -> self_attn -> residual stream writeback
 ffn_hc  -> post_attention_layernorm -> mlp -> residual stream writeback
 ```
 
-### 4.3 `DeepseekV4Attention`
+### 5.3 `DeepseekV4Attention`
 
 DeepSeek V4 attention 的输入由两部分组成：
 
@@ -917,7 +917,7 @@ Output: grouped bmm / grouped linear -> output projection
 - `block_bias` 是否只允许访问因果合法的 compressed entries。
 - `cat` 会创建新 tensor，热点路径中应关注内存带宽和 allocator 行为。
 
-### 4.4 `DeepseekV4HCACompressor`
+### 5.4 `DeepseekV4HCACompressor`
 
 HCA 将连续 token 按固定窗口压缩成 compressed KV。核心操作是：
 
@@ -1017,7 +1017,7 @@ block_bias = tensor([[-inf, -inf],
 - token1 和 token2 可访问 `tokens 0-1` 压缩得到的 entry0。
 - token3 可访问 entry0 和 `tokens 2-3` 压缩得到的 entry1。
 
-### 4.5 `DeepseekV4CSACompressor` 与 `DeepseekV4Indexer`
+### 5.5 `DeepseekV4CSACompressor` 与 `DeepseekV4Indexer`
 
 CSA 在压缩后增加 indexer。indexer 根据当前 query 选择 top-k compressed entries，避免每个 query 访问所有压缩摘要。
 
@@ -1068,7 +1068,7 @@ DeepseekV4CSACompressor:
 scatter_ 构造 compressed branch mask
 ```
 
-### 4.6 `DeepseekV4SparseMoeBlock`
+### 5.6 `DeepseekV4SparseMoeBlock`
 
 MoE 主线：
 
@@ -1145,7 +1145,7 @@ one_hot -> where -> per-expert F.linear -> index_add_
 - per-expert Python loop 会增加 launch 数和调度开销。
 - 高性能实现通常使用 fused dispatch、grouped GEMM 和 fused combine。
 
-### 4.7 `DeepseekV4ForCausalLM.forward`
+### 5.7 `DeepseekV4ForCausalLM.forward`
 
 主线：
 
@@ -1222,3 +1222,615 @@ transpose : [B,num_heads,S,head_dim]
 PyTorch 常见 OP 是阅读 Transformer 源码的基础单位。Llama decoder 可以拆成 embedding、position/mask、RMSNorm、attention、MLP、residual 和 lm_head。DeepSeek V4 在该结构上增加 mHC、多种压缩注意力和 MoE，但核心仍然由 `linear / view / transpose / softmax / matmul / topk / gather / scatter / index_add_` 等 OP 组合完成。
 
 源码分析应先判断 OP 的运行行为，再解释模型语义，最后对照 profiler 信号确认底层执行路径。
+
+## 附录 A. 常见 OP 用例
+
+附录 A 按功能分类列出常见 OP 的功能、典型场景和注意事项。正文用于建立主线，附录用于查阅具体 OP。
+
+### A.1 创建与初始化
+
+| OP | 功能 | 常见场景 | 注意事项 |
+|---|---|---|---|
+| `torch.empty` | 分配未初始化 tensor | workspace、KV cache page、Graph buffer | 后续必须完整写入 |
+| `new_empty` | 继承已有 tensor 的 dtype/device 创建 tensor | 根据输入创建临时 buffer | 只继承属性，不继承内容 |
+| `empty_like` | 按已有 tensor 的 shape/dtype/device 分配 | 输出 buffer、临时结果 | 内容未初始化 |
+| `zeros / ones / full` | 分配并初始化 | mask、padding、默认 metadata | 可能触发 memset 或 fill kernel |
+| `cat / stack` | 拼接或新增维度组合 tensor | 拼接 KV、拼接 logits、batch 组合 | 通常创建新 tensor |
+
+示例：
+
+```python
+import torch
+
+base = torch.ones(2, 3)
+
+# empty_like 只复用 shape/dtype/device，不复制 base 的值。
+tmp = torch.empty_like(base)
+
+# full 创建并初始化。常用于 mask 或默认值。
+mask = torch.full((2, 3), float("-inf"))
+
+# cat 会创建新 tensor，把输入按指定维度拼接。
+joined = torch.cat([base, torch.zeros_like(base)], dim=0)
+
+print("tmp shape =", tuple(tmp.shape))
+print("mask =", mask)
+print("joined shape =", tuple(joined.shape))
+```
+
+输出：
+
+```text
+tmp shape = (2, 3)
+mask = tensor([[-inf, -inf, -inf],
+               [-inf, -inf, -inf]])
+joined shape = (4, 3)
+```
+
+源码映射：
+
+- Llama causal mask 会创建带 `-inf` 的 mask。
+- DeepSeek V4 CSA 会使用 `new_zeros / new_full` 构造 compressed branch mask。
+- Attention 中 `torch.cat([kv, compressed_kv], dim=2)` 会生成拼接后的 KV。
+
+### A.2 原地更新
+
+| OP | 功能 | 常见场景 | 注意事项 |
+|---|---|---|---|
+| `copy_` | 将源 tensor 内容写入已有 tensor | Graph replay 输入更新、metadata buffer 更新 | 目标对象地址保持不变 |
+| `fill_ / zero_` | 原地填充固定值 | padding 清理、mask 重置 | 会覆盖原内容 |
+| `masked_fill_` | 按 mask 原地填充 | attention mask、logits mask | mask broadcast shape 必须正确 |
+| `clamp_` | 原地裁剪数值范围 | 激活裁剪、量化前处理 | 使用前确认后续不再需要原值 |
+
+示例：
+
+```python
+import torch
+
+buffer = torch.zeros(4)
+new_value = torch.tensor([1.0, 2.0, 3.0, 4.0])
+
+# Graph replay 场景中，buffer 对象不变，只更新内容。
+buffer.copy_(new_value)
+
+mask = torch.tensor([False, True, False, True])
+buffer.masked_fill_(mask, -1.0)
+
+print(buffer)
+```
+
+输出：
+
+```text
+tensor([ 1., -1.,  3., -1.])
+```
+
+源码映射：
+
+- Graph replay 前更新固定输入 buffer。
+- SGLang/推理框架中更新 `input_ids`、`positions`、`seq_lens`、`slot_mapping` 等固定 metadata。
+- DeepSeek V4 MoE 或 attention mask 路径中使用原地填充减少临时 tensor。
+
+### A.3 Shape 与 Layout
+
+| OP | 功能 | 是否复制数据 | 注意事项 |
+|---|---|---|---|
+| `view` | 按兼容 stride 改 shape | 不复制 | stride 不兼容会报错 |
+| `reshape` | 改 shape | 可能复制 | 不应默认按零拷贝处理 |
+| `transpose / permute` | 交换维度 | 通常不复制 | 输出常为非连续 tensor |
+| `contiguous` | 生成连续布局 | 非连续输入会复制 | 高频路径需关注 D2D copy |
+| `expand` | 通过 zero-stride 扩展 view | 不复制 | 不应用作原地写目标 |
+
+示例：
+
+```python
+import torch
+
+x = torch.arange(12).view(3, 4)
+y = x.t()
+
+print("x stride =", x.stride(), "contiguous =", x.is_contiguous())
+print("y stride =", y.stride(), "contiguous =", y.is_contiguous())
+
+# y 非连续，contiguous 会生成连续副本。
+z = y.contiguous()
+print("z stride =", z.stride(), "contiguous =", z.is_contiguous())
+```
+
+输出：
+
+```text
+x stride = (4, 1) contiguous = True
+y stride = (1, 4) contiguous = False
+z stride = (3, 1) contiguous = True
+```
+
+源码映射：
+
+- Llama 和 DeepSeek V4 的 Q/K/V 都使用 `view(...).transpose(1, 2)` 组织 head layout。
+- `attn_output.reshape(...).contiguous()` 将 attention 输出恢复为 `[B,S,D]` 的连续布局。
+- DeepSeek V4 多残差流使用 `unsqueeze(2).expand(...).contiguous()` 创建 `[B,S,hc_mult,D]`。
+
+### A.4 索引、选择与合并
+
+| OP | 功能 | 常见场景 | 注意事项 |
+|---|---|---|---|
+| advanced indexing | 按 index 取值 | embedding、hash router | index dtype 通常为 int64 |
+| `gather` | 按 index 从指定维度取值 | router 权重、top-k logits | index shape 要与输入可广播 |
+| `scatter_` | 按 index 写入 | 构造 mask、写 selected block | 重复 index 的语义需明确 |
+| `index_select` | 按一维 index 选取 | token dispatch、KV block 选择 | 输出 shape 跟 index 长度相关 |
+| `index_add_` | 按 index 累加写回 | MoE expert combine | 重复 index 会累加 |
+| `where` | 条件选择或返回坐标 | mask、expert token 查找 | 单参数形式输出动态长度 |
+
+MoE 合并示例：
+
+```python
+import torch
+
+# 三个 expert 输出，需要合并回两个 token。
+token_index = torch.tensor([0, 1, 0])
+expert_out = torch.tensor([
+    [1.0, 0.0],
+    [0.0, 2.0],
+    [3.0, 4.0],
+])
+
+final = torch.zeros(2, 2)
+final.index_add_(0, token_index, expert_out)
+
+print(final)
+```
+
+输出：
+
+```text
+tensor([[4., 4.],
+        [0., 2.]])
+```
+
+源码映射：
+
+- `DeepseekV4TopKRouter` 使用 `topk` 选择 expert，再用 `gather` 取被选 expert 权重。
+- `DeepseekV4Experts` 使用 `where` 找 expert 对应 token，最后用 `index_add_` 合并输出。
+- CSA mask 使用 `scatter_` 标记被 indexer 选中的 compressed entries。
+
+### A.5 数学、归约与激活
+
+| OP | 功能 | 常见场景 | 注意事项 |
+|---|---|---|---|
+| `mean / sum` | 归约 | RMSNorm、统计、loss | 归约维度决定输出 shape |
+| `rsqrt` | 倒数平方根 | RMSNorm | 常与 epsilon 配合 |
+| `silu / gelu / relu` | 激活函数 | MLP、SwiGLU、indexer score | 高频路径常融合 |
+| `softmax` | 归一化概率 | attention、router、sampling | dtype 和 mask 影响数值稳定 |
+| `clamp` | 数值裁剪 | MoE SwiGLU clamp、量化 | 原地版本会覆盖输入 |
+
+SwiGLU 示例：
+
+```python
+import torch
+import torch.nn.functional as F
+
+gate = torch.tensor([[1.0, -1.0, 0.0]])
+up = torch.tensor([[2.0, 3.0, 4.0]])
+
+# SwiGLU 使用激活后的 gate 分支调制 up 分支。
+out = F.silu(gate) * up
+
+print(out)
+```
+
+输出：
+
+```text
+tensor([[ 1.4621, -0.8068,  0.0000]])
+```
+
+源码映射：
+
+- Llama MLP 使用 `act_fn(gate_proj(x)) * up_proj(x)`。
+- DeepSeek V4 expert 内部使用 gate/up/down projection，并可在 SwiGLU 路径加入 clamp。
+- Indexer 使用 `relu` 保留非负相关性分数。
+
+### A.6 线性代数、排序与路由
+
+| OP | 功能 | 常见场景 | 注意事项 |
+|---|---|---|---|
+| `F.linear` | 最后一维线性投影 | Q/K/V、MLP、router、lm_head | 等价于 `x @ weight.T + bias` |
+| `matmul / bmm` | 矩阵乘 | attention score、value 聚合、grouped projection | batch/head 维度必须对齐 |
+| `topk` | 选择最大 k 个值 | MoE routing、sampling、CSA indexer | 固定 k 有利于 shape 稳定 |
+| `sort / argsort` | 排序 | sampling、离线分析、dispatch 排序 | 排序成本高于简单 top-k |
+| `argmax` | 最大值位置 | greedy decode | 输出 index 可能需要 CPU 回读 |
+
+Grouped `bmm` 示例：
+
+```python
+import torch
+
+# 两组矩阵分别相乘，常用于 grouped projection 或 grouped expert。
+x = torch.tensor([
+    [[1.0, 2.0], [3.0, 4.0]],
+    [[1.0, 0.0], [0.0, 1.0]],
+])
+w = torch.tensor([
+    [[1.0], [2.0]],
+    [[3.0], [4.0]],
+])
+
+out = torch.bmm(x, w)
+print(out)
+```
+
+输出：
+
+```text
+tensor([[[ 5.],
+         [11.]],
+
+        [[ 3.],
+         [ 4.]]])
+```
+
+源码映射：
+
+- Llama 中 `F.linear` 覆盖 Q/K/V、MLP 和 lm_head。
+- DeepSeek V4 `GroupedLinear` 可使用 `bmm` 表达 grouped projection。
+- DeepSeek V4 Indexer 使用 `matmul(q, compressed_kv.T)` 对 compressed entries 评分。
+
+### A.7 CPU 边界、动态 Shape 与 Graph
+
+| 类别 | OP/API | 风险 | 推荐做法 |
+|---|---|---|---|
+| CPU 回读 | `.item()`、`.tolist()`、`.cpu()` | 等待 DEVICE 计算完成 | 维护 CPU metadata mirror |
+| 动态 shape | `nonzero`、`unique`、`masked_select` | 输出长度随数据变化 | fixed capacity、padding、sentinel |
+| 显式同步 | `synchronize`、`work.wait()` | 打断异步流水 | 放在 benchmark 或明确边界 |
+| Graph replay | `graph.replay()`、`copy_` | 要求固定 shape 和地址 | capture 前预分配，replay 前只更新内容 |
+
+固定 shape 替代动态选择的示例：
+
+```python
+import torch
+
+scores = torch.tensor([0.8, 0.1, 0.5, 0.2])
+
+# 固定 top-k 输出长度为 2，比 nonzero(scores > threshold) 更适合固定 shape 路径。
+values, indices = torch.topk(scores, k=2)
+
+print("indices =", indices)
+print("values =", values)
+```
+
+输出：
+
+```text
+indices = tensor([0, 2])
+values = tensor([0.8000, 0.5000])
+```
+
+## 附录 B. Llama 详细源码解读
+
+### B.1 `LlamaModel.forward`
+
+执行链路：
+
+```text
+input_ids / inputs_embeds
+  -> embed_tokens
+  -> cache_position / position_ids
+  -> causal_mask
+  -> rotary_emb
+  -> decoder layers
+  -> final norm
+```
+
+关键输入输出：
+
+| 变量 | 典型 shape | 含义 |
+|---|---|---|
+| `input_ids` | `[B,S]` | token id |
+| `inputs_embeds` | `[B,S,D]` | token embedding |
+| `position_ids` | `[1,S]` 或 `[B,S]` | RoPE 位置 |
+| `causal_mask` | `[B,1,S,K]` 或 backend 所需格式 | attention 可见性 |
+| `hidden_states` | `[B,S,D]` | decoder 主状态 |
+
+源码阅读要点：
+
+- 如果用户传入 `inputs_embeds`，模型跳过 embedding 查表。
+- `position_ids` 与 cache position 相关，decode 时需要叠加历史长度。
+- `causal_mask` 的形状和 dtype 会影响 attention backend。
+- RoPE 位置编码在模型层生成后传入每一层，避免每层重复构造。
+
+### B.2 `LlamaDecoderLayer.forward`
+
+执行链路：
+
+```text
+hidden_states
+  -> input_layernorm
+  -> self_attn
+  -> residual add
+  -> post_attention_layernorm
+  -> mlp
+  -> residual add
+```
+
+关键性质：
+
+- Llama 使用 pre-norm，即子层前做 RMSNorm。
+- residual add 要求子层输出 shape 与输入 hidden 一致。
+- attention 与 MLP 都只改变 hidden 的值，不改变 `[B,S,D]` 主 shape。
+
+性能检查：
+
+- RMSNorm 是否进入 fused kernel。
+- attention 是否命中目标 backend。
+- MLP 中 gate/up/down projection 是否使用高性能 GEMM。
+- residual add 是否被后端融合到相邻 kernel。
+
+### B.3 `LlamaAttention.forward`
+
+执行链路：
+
+```text
+hidden_states [B,S,D]
+  -> q_proj/k_proj/v_proj
+  -> view [B,S,H,Dh]
+  -> transpose [B,H,S,Dh]
+  -> apply_rotary_pos_emb(Q,K)
+  -> cache update
+  -> attention_interface
+  -> transpose/reshape/contiguous [B,S,D]
+  -> o_proj
+```
+
+关键 OP：
+
+| 阶段 | OP | 检查点 |
+|---|---|---|
+| projection | `F.linear` | weight dtype、输入 layout、是否量化 |
+| head layout | `view`、`transpose` | `transpose` 后 stride |
+| RoPE | slice、rotate、mul、add | RoPE 维度是否匹配 |
+| cache | cache update | prefill 写入与 decode 追加 |
+| attention | backend dispatch | eager/SDPA/FlashAttention/fused backend |
+| output | `reshape`、`contiguous`、`linear` | 是否产生 D2D copy |
+
+GQA/MQA 中，KV head 少于 query head。`repeat_kv` 会把较少的 KV head 扩展到 query head 数量。该步骤通常通过 `expand` 和 `reshape` 表达，分析时要确认后端是否直接支持 GQA，避免显式扩展造成额外内存压力。
+
+### B.4 `LlamaMLP.forward`
+
+执行链路：
+
+```text
+x
+  -> gate_proj(x)
+  -> up_proj(x)
+  -> act_fn(gate) * up
+  -> down_proj
+```
+
+关键 OP：
+
+- `gate_proj` 和 `up_proj` 是两个独立线性投影。
+- `act_fn(gate) * up` 是 SwiGLU。
+- `down_proj` 将 intermediate size 投回 hidden size。
+
+性能检查：
+
+- gate/up 两个 GEMM 是否可并行或融合。
+- 激活与逐元素乘法是否融合。
+- intermediate tensor 是否占用大量显存带宽。
+
+### B.5 `LlamaForCausalLM.forward`
+
+执行链路：
+
+```text
+self.model(...)
+  -> hidden_states
+  -> logits_to_keep slice
+  -> lm_head
+  -> logits
+  -> optional loss
+```
+
+关键点：
+
+- 推理 decode 通常只计算最后 token 的 logits。
+- `lm_head` 的输出维度是 vocab size，显存带宽和 GEMM 成本都较高。
+- 如果只需要最后 token，不应对全部 sequence 计算 logits。
+- 训练路径的 loss 计算不应进入推理热点路径。
+
+## 附录 C. DeepSeek V4 详细源码解读
+
+### C.1 `DeepseekV4Model.forward`
+
+执行链路：
+
+```text
+input_ids
+  -> embed_tokens
+  -> hidden_states [B,S,D]
+  -> unsqueeze/expand/contiguous
+  -> hidden_states [B,S,hc_mult,D]
+  -> rotary_emb(main, compress)
+  -> decoder layers
+  -> HyperHead
+  -> hidden_states [B,S,D]
+```
+
+关键差异：
+
+- Llama layer 内部处理单条 residual stream。
+- DeepSeek V4 layer 内部处理多条 residual stream。
+- `HyperConnection` 决定子层前如何折叠多条 stream，子层后如何写回。
+- `HyperHead` 在模型末端将多条 stream 折叠为普通 hidden states。
+
+### C.2 `DeepseekV4HyperConnection`
+
+执行链路：
+
+```text
+hidden_states [B,S,hc_mult,D]
+  -> flatten [B,S,hc_mult*D]
+  -> linear 生成 pre/post/comb logits
+  -> split
+  -> sigmoid / softmax
+  -> pre 加权求和得到 collapsed hidden [B,S,D]
+  -> 子层输出后使用 post 和 comb 写回多条 stream
+```
+
+变量含义：
+
+| 变量 | 作用 |
+|---|---|
+| `pre` | 子层输入前，多条 stream 折叠到单条 hidden 的权重 |
+| `post` | 子层输出写回每条 stream 的权重 |
+| `comb` | 旧 residual streams 之间的混合矩阵 |
+
+检查重点：
+
+- `flatten(start_dim=2)` 是否保持 `[B,S]` 前缀维度。
+- `linear` 输出是否正确 split 成 pre/post/comb。
+- `comb` 是否完成归一化，避免某条 residual stream 长期占优。
+
+### C.3 `DeepseekV4Attention`
+
+执行链路：
+
+```text
+collapsed hidden [B,S,D]
+  -> q_a_proj -> q_a_norm -> q_b_proj
+  -> view/transpose -> q_b_norm -> RoPE
+  -> kv_proj -> view/transpose -> kv_norm -> RoPE
+  -> local KV cache update
+  -> HCA/CSA compressed KV
+  -> cat local KV and compressed KV
+  -> cat local mask and block_bias
+  -> attention
+  -> grouped output projection
+```
+
+关键结构：
+
+- `q_a_proj / q_b_proj` 表示 query 低秩投影路径。
+- `kv_proj` 同时生成 key/value 相关表示。
+- compressed attention 将长程历史压缩为额外 KV entries。
+- attention 最终消费的是 `local KV + compressed KV`。
+
+性能检查：
+
+- `cat` 是否在 decode 高频路径产生额外分配和复制。
+- compressed KV 的数量是否受限，避免 attention 退化为长序列全量访问。
+- grouped output projection 是否命中目标 grouped GEMM 或 fused kernel。
+
+### C.4 `DeepseekV4HCACompressor`
+
+执行链路：
+
+```text
+hidden_states
+  -> kv_proj / gate_proj
+  -> view(batch, n_windows, compress_rate, dim)
+  -> gate softmax(dim=window)
+  -> weighted sum
+  -> compressed KV
+  -> compressed position / RoPE
+  -> block_bias
+```
+
+HCA 的核心是窗口内加权聚合：
+
+```text
+compressed_entry = sum(token_kv_i * softmax(gate_i))
+```
+
+`tokens 0-1` 压缩得到 entry0，`tokens 2-3` 压缩得到 entry1。后续 query 通过 `block_bias` 控制能访问哪些 entry，保证不会访问未来信息。
+
+### C.5 `DeepseekV4CSACompressor` 与 `DeepseekV4Indexer`
+
+CSA 由两部分组成：
+
+```text
+CSACompressor:
+  构造重叠压缩窗口 -> softmax weighted sum -> compressed KV
+
+Indexer:
+  query 与 compressed KV 打分 -> topk -> 生成可访问 compressed entry 列表
+```
+
+关键 OP：
+
+| 模块 | OP | 作用 |
+|---|---|---|
+| CSACompressor | `new_zeros`、`new_full`、slice assign | 构造 overlap 窗口和默认 mask |
+| CSACompressor | `softmax`、`sum` | 压缩窗口 |
+| Indexer | `matmul` | query 与 compressed key 打分 |
+| Indexer | `relu`、`topk` | 选择相关 compressed entries |
+| Mask | `scatter_` | 将被选 entry 标记为可见 |
+
+检查重点：
+
+- `topk` 的 k 是否固定。
+- invalid entry 是否使用 sentinel 表达。
+- mask 是否保持固定 shape，避免 Graph replay 受动态 entry 数影响。
+
+### C.6 `DeepseekV4SparseMoeBlock`
+
+执行链路：
+
+```text
+hidden_states [B,S,D]
+  -> flatten [T,D]
+  -> router
+  -> topk expert ids and weights
+  -> expert dispatch
+  -> expert FFN
+  -> index_add_ combine
+  -> shared expert
+  -> routed + shared
+```
+
+关键模块：
+
+| 模块 | OP | 作用 |
+|---|---|---|
+| TopKRouter | `F.linear`、`softmax/sigmoid`、`topk`、`gather` | 按 hidden states 选 expert |
+| HashRouter | `tid2eid[input_ids]`、`gather` | 按 token id 选 expert |
+| Experts | `one_hot`、`where`、`F.linear`、`index_add_` | expert 计算与合并 |
+| Shared experts | `linear`、activation、`linear` | 所有 token 共享的 FFN 分支 |
+
+性能检查：
+
+- router 输出是否固定 top-k。
+- per-expert token 数是否动态，是否需要 fixed capacity。
+- expert dispatch/combine 是否由 Python loop 表达。
+- grouped GEMM 是否替代 per-expert 小 GEMM。
+
+### C.7 `DeepseekV4ForCausalLM`
+
+执行链路：
+
+```text
+self.model(...)
+  -> HyperHead 后的 hidden states
+  -> logits_to_keep slice
+  -> lm_head
+  -> logits
+  -> optional loss / aux loss
+```
+
+推理路径检查：
+
+- 只保留需要计算 logits 的 token。
+- 避免训练 loss、router logits 和 aux loss 分支进入在线 decode。
+- 对 MoE 模型，router logits 可能用于训练负载均衡；推理默认不应输出完整 router 细节。
+
+## 附录 D. 发布前检查清单
+
+| 检查项 | 要求 |
+|---|---|
+| 主线 | 先介绍常见 OP，再用简单模型串联，最后进入 Llama 和 DeepSeek V4 |
+| 分类 | 按功能分类说明 OP：layout、创建、原地更新、数学、线性代数、索引、同步、Graph |
+| 示例 | 关键 OP 提供最小输入、执行过程和输出 |
+| 源码分析 | 每个核心模块说明函数位置、执行链路、shape 变化和关键 OP |
+| 性能分析 | 每个风险点说明触发机制：copy、sync、allocator、dynamic shape、fallback 或 kernel 数量 |
+| 语言 | 使用专业、直接的技术表述，避免口语化和含混表达 |
