@@ -1,0 +1,5 @@
+[TEST1] Device count: 8
+[TEST1] Device 0: MTT S5000
+[TEST1] Allocated 1MB at 0x1000c400000
+[TEST1] Freed
+[TEST1] Done. Check profiler report above.

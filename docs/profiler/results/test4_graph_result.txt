@@ -1,0 +1,15 @@
+=== sglang + MUSA Graph Test Result ===
+Status: FAILED
+Error:  MUSA driver error: operation not permitted when stream is capturing
+
+Attempted configurations (all failed):
+  - Default (--cuda-graph-max-bs default=256)
+  - --cuda-graph-max-bs 8
+  - --cuda-graph-max-bs 4 --mem-fraction-static 0.7
+  - MUSA_LAUNCH_BLOCKING=1
+
+Root cause: MUSA driver does not support stream capture for the
+operations sglang's cuda_graph_runner attempts to record.
+This is a driver-level limitation, independent of the profiler.
+
+Workaround: --disable-cuda-graph (used in Test 4 successfully)

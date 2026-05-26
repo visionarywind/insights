@@ -1,0 +1,24 @@
+/sgl-workspace/sglang/python/sglang/srt/layers/quantization/awq.py:82: UserWarning: MUSA does not support fused_marlin_moe currently.
+  warnings.warn(f"MUSA does not support fused_marlin_moe currently.")
+WARNING:sglang.srt.configs.model_config:Casting torch.bfloat16 to torch.float16.
+WARNING:sglang.srt.server_args:Attention backend not explicitly specified. Use triton backend by default.
+[2026-05-20 06:35:26 TP0] Casting torch.bfloat16 to torch.float16.
+[2026-05-20 06:35:26 TP0] Init torch distributed begin.
+[2026-05-20 06:35:26 TP0] Init torch distributed ends. mem usage=0.00 GB
+[2026-05-20 06:35:27 TP0] Ignore import error when loading sglang.srt.models.mindspore: name 'ms' is not defined
+[2026-05-20 06:35:27 TP0] Load weight begin. avail mem=79.32 GB
+Loading safetensors checkpoint shards:   0% Completed | 0/5 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:  20% Completed | 1/5 [00:03<00:13,  3.40s/it]
+Loading safetensors checkpoint shards:  40% Completed | 2/5 [00:06<00:10,  3.46s/it]
+Loading safetensors checkpoint shards:  60% Completed | 3/5 [00:09<00:06,  3.15s/it]
+Loading safetensors checkpoint shards:  80% Completed | 4/5 [00:10<00:02,  2.34s/it]
+Loading safetensors checkpoint shards: 100% Completed | 5/5 [00:14<00:00,  2.71s/it]
+Loading safetensors checkpoint shards: 100% Completed | 5/5 [00:14<00:00,  2.83s/it]
+
+[2026-05-20 06:35:47 TP0] Load weight end. type=Qwen3ForCausalLM, dtype=torch.float16, avail mem=63.63 GB, mem usage=15.68 GB.
+[2026-05-20 06:35:47 TP0] Using KV cache dtype: torch.float16
+[2026-05-20 06:35:48 TP0] KV Cache is allocated. #tokens: 368497, K size: 25.30 GB, V size: 25.30 GB
+[2026-05-20 06:35:48 TP0] Memory pool end. avail mem=12.28 GB
+/usr/local/lib/python3.10/dist-packages/torch/autograd/profiler.py:271: UserWarning: CUDA is not available, disabling CUDA profiling
+  warn("CUDA is not available, disabling CUDA profiling")
+[rank0]:[W520 06:36:04.154787361 ProcessGroupMCCL.cpp:1095] Warning: WARNING: destroy_process_group() was not called before program exit, which can leak resources. For more info, please see https://pytorch.org/docs/stable/distributed.html#shutdown (function operator())

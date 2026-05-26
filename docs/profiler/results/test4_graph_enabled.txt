@@ -1,0 +1,12 @@
+=== sglang + MUSA Graph (GPU 7) ===
+
+Prefill. latency: 3.17125 s, throughput:     80.73 token/s
+Decode.  median latency: 0.01546 s, median throughput:     64.67 token/s
+Total. latency:  3.703 s, throughput:     77.77 token/s
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg    # of Calls  
+Self CPU time total: 30.537ms
+Prefill. latency: 0.05487 s, throughput:   4665.45 token/s
+                                                   Name    Self CPU %      Self CPU   CPU total %     CPU total  CPU time avg    # of Calls  
+Self CPU time total: 1.032ms
+
+=== Comparison: Without Graph ===

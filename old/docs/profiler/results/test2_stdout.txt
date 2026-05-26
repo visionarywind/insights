@@ -1,0 +1,6 @@
+[TEST2] Driver initialized
+[TEST2] musaGetDeviceCount → 8 devices
+[TEST2] musaGetDevice → 0
+[TEST2] musaGetDeviceProperties done
+[TEST2] musaFree + musaDeviceSynchronize done
+[TEST2] Done. Check profiler report above.

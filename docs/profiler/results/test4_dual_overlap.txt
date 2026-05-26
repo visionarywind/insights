@@ -1,0 +1,84 @@
+══════════════════════════════════════════════════════════════════
+  Qwen3-8B / S5000 GPU 2 — Graph Enabled — Dual Profiler Overlap
+══════════════════════════════════════════════════════════════════
+
+Note: sglang torch.profiler and API profiler cannot both use MUPTI
+simultaneously (MUPTI_ERROR_MULTIPLE_SUBSCRIBERS_NOT_SUPPORTED).
+Data below compiled from two runs of identical workload.
+
+──────────────────────────────────────────────────────────────────
+Layer 1: sglang High-Level Metrics (Graph Enabled)
+──────────────────────────────────────────────────────────────────
+  Warmup Prefill:  3.15s  (81.4 tok/s)   ← torch.compile JIT
+  Bench Prefill:   54ms   (4,725 tok/s)   ← after compile
+  Decode Median:   15.7ms (63.9 tok/s)    ← MUSA graph replay
+  Total:           1.05s  (306 tok/s)
+  torch.profiler CPU dispatch: 1.07ms
+
+──────────────────────────────────────────────────────────────────
+Layer 2: sglang torch.profiler — Operator Dispatch (CPU)
+──────────────────────────────────────────────────────────────────
+  CompiledFxGraph (graph replay)     17.4%   187us
+  aten::_copy_from (output→host)     16.2%   174us
+  Torch-Compiled Region               13.6%   146us   (total 38.1%)
+  aten::add_                          7.3%    78us
+  aten::slice                         6.4%    68us
+  aten::argmax                        4.1%    44us
+  aten::_index_put_impl_ (KV cache)   4.0%    42us
+  TorchDynamo Cache Lookup            3.3%    35us
+
+  NOTE: With graph enabled, operator dispatch is nearly eliminated.
+  Self CPU total = 1.07ms (vs 25.8ms without graph, 24x reduction).
+
+──────────────────────────────────────────────────────────────────
+Layer 3: API Profiler — Driver API (mu*) Overview
+──────────────────────────────────────────────────────────────────
+  driver:muModuleLoadData            23 calls   8,907ms   torch.compile JIT
+  driver:muMemcpyHtoDAsync_v2       429 calls   1,077ms   weight→GPU
+  driver:muModuleGetFunction         56 calls     467ms   kernel symbol resolve
+  driver:muMemSetAccess             225 calls     415ms   GPU page tables
+  driver:muLaunchKernel          53,387 calls     223ms   kernel submit (4.2us avg)
+  driver:muStreamCreateWithPriority  96 calls     129ms   sglang priority streams
+  driver:muCtxSynchronize           197 calls     128ms   GPU wait (incl. execution)
+  driver:muCtxGetDevice          550,877 calls      91ms   context queries
+  driver:muInit                       1 call       31ms   driver init
+  driver:muMemCreate               3,409 calls      26ms   memory pool alloc
+
+──────────────────────────────────────────────────────────────────
+Layer 4: API Profiler — GPU Kernel Detail
+──────────────────────────────────────────────────────────────────
+  batch_gemv_row_continuous<half>    10,248 calls   47.5ms   matmul
+  LayerNormGlobalKernelVlen<half>     6,912 calls   31.0ms   rms norm
+  IndexVectorizedKernel<half>         6,768 calls   30.3ms   embedding/index
+  triton_poi_fused_*                  6,912 calls   37.4ms   fused ops
+  _fwd_grouped_kernel_stage1          3,384 calls   20.1ms   flash attn prefill
+  _fwd_kernel_stage2                  3,384 calls   16.8ms   flash attn decode
+  KernelSwiGlu<half>                  3,456 calls   15.4ms   activation
+
+──────────────────────────────────────────────────────────────────
+Cross-Layer Correlation
+──────────────────────────────────────────────────────────────────
+
+  sglang operator          →  underlying driver API
+  ─────────────────────     ─────────────────────────
+  CompiledFxGraph           →  muLaunchKernel (53,387 calls, 223ms)
+  model.load_weights()      →  muMemcpyHtoDAsync_v2 (429 calls, 1,077ms)
+  torch.compile JIT         →  muModuleLoadData (23 calls, 8,907ms)
+  torch.musa.synchronize()  →  muCtxSynchronize (197 calls, 128ms)
+  sglang stream mgmt        →  muStreamCreateWithPriority (96 calls, 129ms)
+  PyTorch context queries   →  muCtxGetDevice (550,877 calls, 91ms)
+
+──────────────────────────────────────────────────────────────────
+Performance Impact of MUSA Graph
+──────────────────────────────────────────────────────────────────
+                    Without Graph    With Graph    Speedup
+  Decode Median       27.4ms          15.7ms       1.7x
+  Total (bench)       1.82s           1.05s        1.7x
+  CPU dispatch        25.8ms          1.07ms       24x
+  Throughput          176 tok/s       306 tok/s     1.7x
+
+──────────────────────────────────────────────────────────────────
+Chrome Trace Files
+──────────────────────────────────────────────────────────────────
+  /tmp/sglang_profile/profile_batch1_input256_output64_prefill.trace.json.gz  (820 KB)
+  /tmp/sglang_profile/profile_batch1_input256_output64_decode.trace.json.gz    (28 KB)

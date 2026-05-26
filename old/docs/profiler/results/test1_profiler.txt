@@ -1,0 +1,16 @@
+
+================================================================================
+     MUSA API Latency Report  (total=inclusive, self=excl. children)
+================================================================================
+  Name                                                      Count  Total(us)   Self(us)  Min(us)  Max(us)
+--------------------------------------------------------------------------------
+  driver:muCtxCreate                                            1      67749      67749    67749    67749
+  driver:muInit                                                 1      28384      28384    28384    28384
+  driver:muMemAlloc_v2                                          1         82         82       82       82
+  driver:muMemFree_v2                                           1          5          5        5        5
+  driver:muDeviceGetName                                        1          0          0        0        0
+  driver:muDeviceGetCount                                       1          0          0        0        0
+================================================================================
+
+── Wrapper Detection (Self < 10% of Total) ──
+

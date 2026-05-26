@@ -1,0 +1,7 @@
+[TEST3] musaMalloc → 0x1000c400000
+[TEST3] musaMemcpyAsync done
+[TEST3] musaDeviceSynchronize done
+[TEST3] musaFree done
+[TEST3] Done. Look for 'runtime:' and 'driver:' entries above.
+[TEST3] 'runtime:musaMalloc' should show as a wrapper with most
+[TEST3] time spent in 'driver:muDevicePrimaryCtxRetain' child calls.
