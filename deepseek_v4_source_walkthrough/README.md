@@ -2,9 +2,12 @@
 
 建议阅读顺序：
 
-1. [`00_start_here.md`](00_start_here.md)：按执行顺序解释核心模块。
-2. [`01_minimal_numeric_example.md`](01_minimal_numeric_example.md)：提供最小数值示例和运行结果。
+1. [`modular_deepseek_v4_annotated.py`](modular_deepseek_v4_annotated.py)：从 `repos/transformers/src/transformers/models/deepseek_v4/modular_deepseek_v4.py` 复制出的源码副本，已在关键语句旁补充中文注释和最小数值例子。
+2. [`run_deepseek_v4_tiny_trace.py`](run_deepseek_v4_tiny_trace.py)：不依赖 PyTorch/Transformers 的完整流程模拟脚本，可直接运行查看每一步的输入、计算和输出。
 3. [`02_deepseek_v4_source_module_execution.md`](02_deepseek_v4_source_module_execution.md)：对照 `repos/transformers` 中的真实源码，分析 `DeepseekV4ForCausalLM`、`DeepseekV4Model`、`DeepseekV4DecoderLayer`、Attention、HCA、CSA、Indexer、mHC、MoE 和 `lm_head` 的执行流程。
+4. [`01_minimal_numeric_example.md`](01_minimal_numeric_example.md)：提供最小数值示例和运行结果。
+5. [`00_start_here.md`](00_start_here.md)：按执行顺序解释核心模块。
+6. [`03_deepseek_v4_annotated_source_examples.py`](03_deepseek_v4_annotated_source_examples.py)：早期摘录版注释，后续以 `modular_deepseek_v4_annotated.py` 为准。
 
 同目录提供一个不依赖 PyTorch/Transformers 的流程模拟脚本：
 
@@ -14,12 +17,6 @@ python insights/deepseek_v4_source_walkthrough/run_deepseek_v4_tiny_trace.py
 ```
 
 它输出形状、关键中间值和模块执行顺序，便于和源码分析对照。
-
-这份说明面向第一次阅读 Transformer 源码的读者，重点回答三个问题：
-
-1. 一串 token 输入模型后，数据按什么顺序流动？
-2. DeepSeek-V4 比普通 decoder-only Transformer 多了哪些关键模块？
-3. 用很小的配置跑一次 forward 时，每个模块会看到什么形状的张量？
 
 ## 核心结构
 
