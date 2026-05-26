@@ -344,7 +344,140 @@ to / float / half / bfloat16 / int / long
 - `to(device)` 是否引入 H2D、D2H 或跨设备 copy。
 - 量化路径中 activation、weight、scale 的 dtype、shape、stride 是否匹配目标 kernel。
 
-## 3. Llama Decoder 源码拆解
+## 3. 简单模型中的 OP 执行流程
+
+在真实 Transformer 之前，先用一个最小 decoder block 串起常见 OP。这个例子覆盖 embedding、position、mask、Q/K/V projection、attention、residual、MLP 和 logits projection。它不依赖 Transformers 源码，但执行结构与 decoder-only 模型一致。
+
+### 3.1 最小 Decoder Block
+
+模型输入：
+
+```text
+input_ids shape=[B=1, S=3]
+embedding table shape=[V=5, D=4]
+hidden shape=[B=1, S=3, D=4]
+```
+
+执行流程：
+
+```text
+input_ids
+  -> embedding 查表
+  -> Q/K/V linear projection
+  -> view/transpose 组织 head layout
+  -> causal mask
+  -> attention softmax 与 value 加权
+  -> residual add
+  -> SwiGLU MLP
+  -> residual add
+  -> lm_head
+  -> logits
+```
+
+最小可执行代码：
+
+```python
+import torch
+import torch.nn.functional as F
+
+torch.set_printoptions(precision=4, sci_mode=False)
+
+# 1. token id。真实模型中 input_ids 来自 tokenizer。
+input_ids = torch.tensor([[1, 3, 2]])
+
+# 2. embedding table。每个 token id 选择一行向量。
+embedding_table = torch.tensor([
+    [0.0, 0.0, 0.0, 0.0],
+    [1.0, 0.0, 0.0, 1.0],
+    [0.0, 1.0, 0.0, 1.0],
+    [0.0, 0.0, 1.0, 1.0],
+    [1.0, 1.0, 0.0, 0.0],
+])
+hidden = embedding_table[input_ids]
+
+# 3. Q/K/V projection。这里使用单位矩阵，便于核对数值。
+weight = torch.eye(4)
+q = F.linear(hidden, weight)
+k = F.linear(hidden, weight)
+v = F.linear(hidden, weight)
+
+# 4. 组织成多头布局：[B,S,D] -> [B,H,S,Dh]，H=2, Dh=2。
+B, S, D = hidden.shape
+H, Dh = 2, 2
+q = q.view(B, S, H, Dh).transpose(1, 2)
+k = k.view(B, S, H, Dh).transpose(1, 2)
+v = v.view(B, S, H, Dh).transpose(1, 2)
+
+# 5. attention score 和 causal mask。
+scores = torch.matmul(q, k.transpose(2, 3)) * (Dh ** -0.5)
+mask = torch.triu(torch.full((S, S), float("-inf")), diagonal=1)
+scores = scores + mask.view(1, 1, S, S)
+probs = torch.softmax(scores, dim=-1)
+
+# 6. attention 输出回到 [B,S,D]。
+attn = torch.matmul(probs, v).transpose(1, 2).contiguous().view(B, S, D)
+hidden = hidden + attn
+
+# 7. SwiGLU MLP。为了示例简洁，使用手工权重。
+gate_w = torch.eye(4)
+up_w = torch.ones(4, 4) * 0.25
+down_w = torch.eye(4)
+gate = F.linear(hidden, gate_w)
+up = F.linear(hidden, up_w)
+mlp = F.linear(F.silu(gate) * up, down_w)
+hidden = hidden + mlp
+
+# 8. lm_head 将 hidden 投影到 vocab logits。
+lm_head = torch.tensor([
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+    [0.5, 0.5, 0.0, 0.0],
+])
+logits = F.linear(hidden, lm_head)
+
+print("hidden shape =", tuple(hidden.shape))
+print("attention probs head0 =", probs[0, 0])
+print("last token logits =", logits[0, -1])
+```
+
+参考输出：
+
+```text
+hidden shape = (1, 3, 4)
+attention probs head0 = tensor([[1.0000, 0.0000, 0.0000],
+                                [0.5000, 0.5000, 0.0000],
+                                [0.2483, 0.2483, 0.5035]])
+last token logits = tensor([0.3907, 2.7596, 0.5317, 3.7991, 1.5752])
+```
+
+### 3.2 该模型中的 OP 分类
+
+| 阶段 | OP | 功能 | 注意事项 |
+|---|---|---|---|
+| token 输入 | indexing / embedding | 将 token id 转为 hidden states | `input_ids` 必须是整型；embedding 输出进入模型 dtype |
+| Q/K/V | `F.linear` | 生成 query、key、value | dtype/layout 决定 GEMM 路径 |
+| head layout | `view`、`transpose`、`contiguous` | 将 `[B,S,D]` 转为 `[B,H,S,Dh]` | `transpose` 后通常非连续 |
+| causal mask | `full`、`triu`、加法 | 屏蔽未来 token | mask dtype 和 broadcast shape 必须匹配 attention |
+| attention | `matmul`、`softmax`、`matmul` | 计算 token 间依赖 | reference 路径可能产生大 score tensor |
+| residual | `add` | 保留子层输入 | shape 必须一致 |
+| MLP | `linear`、`silu`、`mul`、`linear` | token 内非线性变换 | 多个逐元素 OP 可融合 |
+| logits | `linear` | 投影到 vocabulary | decode 常只需要最后 token |
+
+这个最小模型对应真实源码中的主要路径：
+
+```text
+LlamaModel.forward
+  -> LlamaDecoderLayer.forward
+  -> LlamaAttention.forward
+  -> LlamaMLP.forward
+  -> LlamaForCausalLM.forward
+```
+
+DeepSeek V4 在此基础上增加多残差流、压缩注意力和 MoE，但底层仍由这些 OP 组合构成。
+
+## 4. Llama Decoder 源码拆解
 
 Llama 是标准 decoder-only 模型。主执行链路：
 
@@ -642,7 +775,7 @@ logits = self.lm_head(hidden_states)
 - decode 通常只需要最后一个 token 的 logits。
 - `logits_to_keep` 可以减少不必要的 vocab projection。
 
-## 4. DeepSeek V4 源码进阶
+## 5. DeepSeek V4 源码进阶
 
 DeepSeek V4 在经典 decoder 结构上增加三类关键机制：
 
@@ -1031,7 +1164,7 @@ self.model(...)
 - `logits_to_keep` 能减少不必要的 vocab projection。
 - 训练路径需要 labels、loss 和 router aux loss；推理路径应避免无关分支进入热点。
 
-## 5. OP 与性能排查
+## 6. OP 与性能排查
 
 Profiler 现象应回到源码中的具体 OP，而不是停留在模块名。
 
@@ -1052,7 +1185,7 @@ Profiler 现象应回到源码中的具体 OP，而不是停留在模块名。
 - 对 kernel 数量过多，使用 fused norm、fused activation、fused attention、grouped GEMM 或后端专用 MoE kernel。
 - 对 Graph replay，固定 shape、固定地址、固定 metadata，并把动态整理放在 Graph 外。
 
-## 6. 源码分析步骤
+## 7. 源码分析步骤
 
 分析一段 Transformer 源码时，按以下顺序执行：
 
@@ -1084,7 +1217,7 @@ transpose : [B,num_heads,S,head_dim]
 - 张量变化：从普通 hidden layout 变成多头 attention layout。
 - 性能检查：`transpose` 后是否非连续，后续 attention backend 是否支持该 layout。
 
-## 7. 结论
+## 8. 总结
 
 PyTorch 常见 OP 是阅读 Transformer 源码的基础单位。Llama decoder 可以拆成 embedding、position/mask、RMSNorm、attention、MLP、residual 和 lm_head。DeepSeek V4 在该结构上增加 mHC、多种压缩注意力和 MoE，但核心仍然由 `linear / view / transpose / softmax / matmul / topk / gather / scatter / index_add_` 等 OP 组合完成。
 
