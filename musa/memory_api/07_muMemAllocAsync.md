@@ -6,7 +6,9 @@
 
 ## 1. 功能概述
 
-在指定的 stream 上**异步**分配设备内存。分配操作被编码为 stream 命令流的一部分，流有序 (stream-ordered)。
+在指定的 stream 上分配流有序内存。当前源码的正常执行路径中，API 调用会直接完成虚拟内存对象创建、物理内存对象创建和虚拟/物理绑定；真正进入 stream 排队的是页表访问权限更新，即 `MemoryPool::ModifyAccess` 触发的 `PagingCommand`。
+
+Graph Capture 路径不同：捕获状态下只记录 `GraphMemAllocNode`，实际分配在图执行阶段发生。
 
 变体:
 | API | 说明 |
@@ -52,14 +54,15 @@ MUresult muapiMemAllocAsync(MUdeviceptr *dptr,
                 memAllocParam.size = bytesize;
                 // pool = nullptr → 使用设备默认 pool
 
-                // 提交到 Stream (非阻塞)
+                // 进入 Stream 分发入口 (非阻塞)
                 status = pStream->CmdMemAlloc(memAllocParam, false);
                 //                                  ↑ blocking=false
                 if (status != MUSA_SUCCESS) {
                     *dptr = 0;
                 } else {
                     *dptr = memAllocParam.virtAddress;
-                    // 返回虚拟地址 (分配完成后有效)
+                    // 返回虚拟地址。GPU 访问权限需要等待同一 stream 中的
+                    // PagingCommand 生效。
                 }
             }
         }
@@ -220,7 +223,10 @@ MUresult Stream::AsyncMemAlloc(MemoryAllocParameter& param,
             // 通知 GPU 新的映射关系
             status = pPool->ModifyAccess(virt, physical,
                                          allocSize, blocking, this);
-            // 核心: 修改 GPU 页表, 设置访问权限
+            // 调用链: MemoryPool::ModifyAccess
+            //        → Stream::CmdPaging
+            //        → PagingCommand::Submit
+            // 核心作用: 修改 GPU 页表, 设置访问权限
             // 失败时回滚
         }
 
@@ -288,14 +294,15 @@ Stream::AsyncMemAlloc(param, blocking)
 ┌─────────────────────┬────────────────────────┬────────────────────────┐
 │      特性           │  muMemAlloc (同步)      │  muMemAllocAsync       │
 ├─────────────────────┼────────────────────────┼────────────────────────┤
-│ 分配时机            │ 立即执行               │ Stream 执行到该命令时   │
+│ 内存对象创建时机    │ API 调用期间            │ API 调用期间             │
+│ GPU 访问生效时机    │ API 返回前              │ 同一 stream 的 PagingCommand 完成后 │
 │ 虚拟内存            │ 可选 (SubAlloc 路径)    │ 总是                   │
 │ 物理内存            │ Pool 子分配             │ 裸 KMD 分配 (flags=0)  │
 │ Bind/Unbind         │ 不需要                 │ 需要                   │
-│ GPU 可见性          │ 分配后立即可见          │ Stream 执行后可见       │
+│ GPU 可见性          │ 分配后立即可见          │ 页表更新命令完成后可见   │
 │ 适用场景            │ 简单分配               │ 图执行/Stream Ordered   │
 │ 返回值含义          │ GPU VA (SubAlloc)       │ GPU VA (虚拟地址)       │
-│                     │ (立即有效)              │ (Stream 执行后有效)     │
+│                     │ (立即有效)              │ (访问权限由 stream 排序保证) │
 └─────────────────────┴────────────────────────┴────────────────────────┘
 ```
 
@@ -307,9 +314,10 @@ Stream::AsyncMemAlloc(param, blocking)
 *dptr = memAllocParam.virtAddress
 ```
 
-- 这是**虚拟地址**, 不是物理地址
-- 在 stream 执行到分配命令之前, 地址不可用
-- 后续命令 (memset/memcpy) 可以立即使用此地址 (流有序保证)
+- 返回值是虚拟地址，不是物理地址。
+- API 返回时，虚拟地址和物理内存对象已经建立绑定。
+- GPU 对该地址的访问权限由 `PagingCommand` 生效。
+- 后续命令如果提交到同一个 stream，可以依赖 stream 顺序使用该地址。
 
 ### 9.2 隐式释放
 
@@ -330,7 +338,24 @@ AsyncMemAlloc 分配的内存, 在流的生命周期结束时需要显式释放:
   - 图释放时对应 GraphMemFreeNode 触发 AsyncMemFree
 ```
 
-## 10. 相关源码位置
+## 10. 日志验证结果
+
+最小用例 `memory_api_callflow_demo.cpp` 打开 `MUSA_DRIVER_CALLFLOW_DEBUG=1` 后确认了当前执行顺序：
+
+```text
+muapiMemAllocAsync
+  -> Stream::CmdMemAlloc
+  -> Stream::AsyncMemAlloc
+  -> MemoryPool::CreateMemory
+  -> physical->Init(General, flags=0)
+  -> MemoryPool::ModifyAccess
+  -> Stream::CmdPaging
+  -> PagingCommand::Submit
+```
+
+日志中没有单独的 `MemAllocCommand`。当前正常路径由 `Stream::AsyncMemAlloc` 直接执行对象创建和绑定，stream 命令只负责页表访问权限更新。
+
+## 11. 相关源码位置
 
 | 文件 | 行数 | 说明 |
 |------|------|------|

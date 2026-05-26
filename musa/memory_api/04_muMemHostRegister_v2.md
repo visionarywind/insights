@@ -29,7 +29,40 @@ MUresult muapiMemHostRegister(void *ptr, unsigned int size,
 }
 ```
 
-## 3. 核心实现源码逐行分析
+## 3. Driver 入口到 Core 层的逐层路径
+
+```
+muapiMemHostRegister(p, size, Flags)
+  │
+  └─ muapiMemHostRegister_v2(p, static_cast<size_t>(size), Flags)
+      │
+      ├─ InitPlatform()
+      ├─ 参数校验
+      │   ├─ ptr == nullptr -> MUSA_ERROR_INVALID_VALUE
+      │   └─ bytesize == 0  -> MUSA_ERROR_INVALID_VALUE
+      │
+      ├─ TlsCtxTop()
+      │   └─ 当前线程没有 Context -> MUSA_ERROR_INVALID_CONTEXT
+      │
+      ├─ 构造 MemoryCreateInfo
+      │   ├─ type = memoryTypeRegisteredPinnedHost
+      │   ├─ registeredPinnedHost.ptr = p
+      │   ├─ registeredPinnedHost.size = bytesize
+      │   └─ registeredPinnedHost.flags =
+      │      Flags | MU_MEMORY_REGISTER_OVERLAP_CHECK
+      │
+      └─ IContext::CreateMemory(&pMemory, createInfo)
+          │
+          └─ Context::CreateMemory(&pMemory, createInfo)
+              │
+              └─ Memory::Init(createInfo)
+                  │
+                  └─ Memory::PinnedHostRegister(ptr, size, flags)
+```
+
+这一层路径中，MUSA 不分配用户主机内存，只把用户提供的地址范围注册为 `memoryTypeRegisteredPinnedHost`。实际 pin 和 GPU 映射在 `PinnedHostRegister` 内部通过 HAL view 创建完成。
+
+## 4. 核心实现源码逐行分析
 
 ```cpp
 // memory.cpp:611
@@ -164,7 +197,7 @@ MUresult Memory::PinnedHostRegister(void* ptr, size_t size,
 }
 ```
 
-## 4. HAL 层: InitLockedMemory 源码
+## 5. HAL 层: InitLockedMemory 源码
 
 ```cpp
 // hal/m3d/memory.cpp:590
@@ -264,7 +297,7 @@ Result Memory::InitLockedMemory(const MemoryCreateInfo& createInfo)
 }
 ```
 
-## 5. HAL 层: InitExternalMemory (MMIO) 源码
+## 6. HAL 层: InitExternalMemory (MMIO) 源码
 
 ```cpp
 // hal/m3d/memory.cpp:744
@@ -322,7 +355,7 @@ Result Memory::InitExternalMemory(const MemoryCreateInfo& createInfo)
 }
 ```
 
-## 6. 与 muMemHostAlloc 的关键区别
+## 7. 与 muMemHostAlloc 的关键区别
 
 ```
 ┌─────────────────────┬──────────────────────┬──────────────────────┐
@@ -341,7 +374,7 @@ Result Memory::InitExternalMemory(const MemoryCreateInfo& createInfo)
 └─────────────────────┴──────────────────────┴──────────────────────┘
 ```
 
-## 7. Peer Access (PORTABLE flag)
+## 8. Peer Access (PORTABLE flag)
 
 ```
 PinnedHostAlloc:
@@ -354,7 +387,22 @@ PinnedHostRegister (Locked):
   → CreateMemory 后 MapToPeers 会建立 peer 映射
 ```
 
-## 8. 相关源码位置
+## 9. 日志验证结果
+
+最小用例 `memory_api_callflow_demo.cpp` 打开 `MUSA_DRIVER_CALLFLOW_DEBUG=1` 后确认入口层级：
+
+```text
+muapiMemHostRegister_v2
+  -> TlsCtxTop
+  -> IContext::CreateMemory
+  -> Context::CreateMemory
+  -> Memory::Init
+  -> Memory::PinnedHostRegister
+```
+
+本次用例中传入 flags 为 `0x0`，driver 追加 `MU_MEMORY_REGISTER_OVERLAP_CHECK` 后进入 `CreateMemory` 的 flags 为 `0x100000`。
+
+## 10. 相关源码位置
 
 | 文件 | 行数 | 说明 |
 |------|------|------|

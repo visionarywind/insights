@@ -123,7 +123,12 @@ muapiPointerGetAttribute(data, attribute, ptr)            [mu_memory.cpp:679]
 ```
 muapiPointerGetAttributes(numAttributes, attributes, data, ptr)  [mu_memory.cpp:683]
   │
-  +-- for i = 0..numAttributes:
+  +-- 参数校验:
+  │     numAttributes > 0
+  │     attributes != nullptr
+  │     data != nullptr
+  │
+  +-- for i = 0..numAttributes-1:
   │     imuapiPointerGetAttribute(data[i], attributes[i], ptr)
   │     (逐条调用单属性查询, 遇到错误即中止)
 ```
@@ -142,7 +147,22 @@ pMemory->GetProps(pContext->GetDevice()) & Hal::memoryPropertyDeviceMapped
 - 对于 RegisteredPinnedHost: 仅当用户传入 `MU_MEMHOSTREGISTER_DEVICEMAP` 时为 true
 - 对于 General 设备内存: 恒为 true
 
-## 6. 相关源码位置
+## 6. 日志验证结果
+
+最小用例 `memory_api_callflow_demo.cpp` 打开 `MUSA_DRIVER_CALLFLOW_DEBUG=1` 后确认批量查询不会一次性解析所有属性，而是逐项调用 `imuapiPointerGetAttribute`：
+
+```text
+muapiPointerGetAttributes
+  -> imuapiPointerGetAttribute(attr=MEMORY_TYPE)
+  -> imuapiPointerGetAttribute(attr=DEVICE_POINTER)
+  -> imuapiPointerGetAttribute(attr=RANGE_START_ADDR)
+  -> imuapiPointerGetAttribute(attr=RANGE_SIZE)
+  -> imuapiPointerGetAttribute(attr=DEVICE_ORDINAL)
+```
+
+每一次 `imuapiPointerGetAttribute` 都会重新执行 `MemoryTracker::FindRange(ptr, &offset, Hal::memoryPropertyPhysical)`，再根据 attribute 分支写入输出数据。
+
+## 7. 相关源码位置
 
 | 文件 | 行数 | 说明 |
 |------|------|------|

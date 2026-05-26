@@ -22,18 +22,22 @@ muapiMemsetD32(dstDevice, value, count)
   ├─ InitPlatform()                                      [internal.h:306]
   │
   ├─ 构造 MUSA_MEMSET_NODE_PARAMS:                       [Driver 层]
-  │     .dstDevice = dstDevice
+  │     .dst = dstDevice
   │     .value     = value (填充值, 按 elementSize 截取)
   │     .count     = count (元素个数)
   │     .pitch     = 0
   │     .height    = 1
   │     .elementSize = 4 (D32) / 2 (D16) / 1 (D8)
   │
-  └─ Context::GeneralMemset(ctx, nullptr, params, true)   [context.cpp:733]
+  └─ Context::GeneralMemset(ctx, nullptr, params, true)   [context.cpp]
         │
-        ├─ 校验 Context
-        ├─ 创建图节点
-        └─ 提交或捕获
+        ├─ Platform::ValidateContext(ctx)
+        ├─ Context::InfoStream(ctx, hStream)
+        ├─ Context::CreateMemsetNode(params, &node, wait)
+        │   └─ GraphMemsetNode::Init(wait)
+        │       └─ GraphMemsetNode::MemsetLegalize(...)
+        └─ Stream::CmdMemset(node, wait)
+            └─ MemsetCommand::Submit()
 ```
 
 ## 3. Context::GeneralMemset 源码逐行分析
@@ -66,10 +70,18 @@ MUresult Context::GeneralMemset(Context* ctx, MUstream hStream,
                   memsetParam.height *
                   memsetParam.elementSize) {
 
-            // ── Step 4: 创建图节点 ──
+        // ── Step 4: 创建图节点 ──
             Musa::IGraphNode* pGraphNode;
             status = ctx->CreateMemsetNode(
                 memsetParam, &pGraphNode, wait);
+            // 调用链:
+            //   Context::CreateMemsetNode
+            //   → new GraphMemsetNode
+            //   → GraphMemsetNode::Init(wait)
+            //   → GraphMemsetNode::MemsetLegalize(...)
+            //
+            // 注意: wait 是引用参数。MemsetLegalize 会根据目标内存类型、
+            // syncMemOps 和 Context flag 调整 wait。
             if (MUSA_SUCCESS != status) {
                 break;
             }
@@ -121,7 +133,7 @@ MUresult Stream::CmdMemset(IGraphNode* pGraphNode, bool blocking)
 MemsetCommand::Execute/Submit()
   │
   ├─ Step 1: 获取参数
-  │   dstAddr = graphNode->GetParams().dstDevice + byteOffset
+  │   dstAddr = graphNode->GetParams().dst + byteOffset
   │   value   = graphNode->GetParams().value
   │   count   = graphNode->GetParams().count
   │   elementSize = graphNode->GetParams().elementSize
@@ -142,19 +154,42 @@ MemsetCommand::Execute/Submit()
   ├─ Step 3: 依赖管理
   │   前驱命令完成 → 自动触发
   │
-  └─ Step 4: 完成通知
+└─ Step 4: 完成通知
         command->SetStatus(completed)
         通知等待的同步点
 ```
 
-## 6. 2D Memset (Pitch 版本)
+## 6. 日志验证结果
+
+最小用例 `memory_api_callflow_demo.cpp` 打开 `MUSA_DRIVER_CALLFLOW_DEBUG=1` 后确认了 `muMemsetD32` 的逐层路径：
+
+```text
+muapiMemsetD32_v2
+  -> Context::GeneralMemset
+  -> Context::InfoStream
+  -> Context::CreateMemsetNode
+  -> Stream::CmdMemset
+  -> Context::ResolveDependencyAndQueueCommand
+  -> MemsetCommand::Submit
+```
+
+本次用例中，`MemsetCommand::Submit` 选择了队列提交路径：
+
+```text
+MemsetCommand::Submit
+  -> Command::SubmitToQueue
+```
+
+如果命令被判定为 CPU 或 DMA 路径，则会分别进入 `CpuExecute()` 或 `DmaExecute()`。
+
+## 7. 2D Memset (Pitch 版本)
 
 ```cpp
 // Driver 入口
 muapiMemsetD32Pitch(dstDevice, pitch, value, width, height)
   │
   └─ MUSA_MEMSET_NODE_PARAMS:
-        .dstDevice = dstDevice
+        .dst = dstDevice
         .value     = value
         .count     = width         ← 每行元素数
         .pitch     = pitch         ← 每行字节数 (含 padding)
@@ -170,7 +205,7 @@ for (row = 0; row < height; row++) {
 }
 ```
 
-## 7. 变体参数对照
+## 8. 变体参数对照
 
 | 变体 | elementSize | value 类型 | count 含义 |
 |------|-------------|-----------|-----------|
@@ -179,7 +214,7 @@ for (row = 0; row < height; row++) {
 | `muMemsetD32` | 4 | uint32_t | 字数 |
 | `muMemsetD32Pitch` | 4 | uint32_t | 每行字数 |
 
-## 8. 与 memcpy 的归一化对比
+## 9. 与 memcpy 的归一化对比
 
 ```
 memcpy 归一化: MUSA_MEMCPY3D_PEER
@@ -191,7 +226,7 @@ memset 归一化: MUSA_MEMSET_NODE_PARAMS
   → Context::GeneralMemset() → GraphMemsetNode
 ```
 
-## 9. 常见问题
+## 10. 常见问题
 
 ### Q: 为什么 memset 也有 Graph 节点?
 A: 为了与 stream 中的其他命令保持正确的依赖关系,
@@ -205,7 +240,7 @@ A: GPU DMA 引擎启动有固定开销 (~几微秒)。
 A: 是的。elementSize 作为参数传入,
    GPU 指令编码时按 elementSize 广播 value。
 
-## 10. 相关源码位置
+## 11. 相关源码位置
 
 | 文件 | 行数 | 说明 |
 |------|------|------|

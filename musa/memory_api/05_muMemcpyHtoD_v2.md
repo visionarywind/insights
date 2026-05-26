@@ -523,7 +523,24 @@ SyncMemcpyCommand:
   └─ 适用于 blocking=true 的场景
 ```
 
-## 8. 归一化汇总
+## 8. 日志验证结果
+
+最小用例 `memory_api_callflow_demo.cpp` 打开 `MUSA_DRIVER_CALLFLOW_DEBUG=1` 后确认 `muMemcpyHtoD_v2` 的逐层路径：
+
+```text
+muapiMemcpyHtoD_v2
+  -> Context::GeneralMemcpy
+  -> Context::InfoStream
+  -> Context::CreateMemcpyNode
+  -> Stream::CmdCopyMemory
+  -> Context::ResolveDependencyAndQueueCommand
+  -> SyncMemcpyCommand::Submit
+  -> copyManager=MemcpyH2D
+```
+
+本次用例是同步 HtoD 拷贝，因此 `Stream::CmdCopyMemory` 创建的是 `SyncMemcpyCommand`。异步 API 或不同拷贝类型会根据 `GraphMemcpyNode::IsAsyncMemcpyCmd` 选择 `AsyncMemcpyCommand`。
+
+## 9. 归一化汇总
 
 ```
                         GetMemcpy3DFrom1D(copy3D, dst, src, size, kind)
@@ -548,7 +565,7 @@ SyncMemcpyCommand:
               硬件编码 + 提交
 ```
 
-## 9. 相关源码位置
+## 10. 相关源码位置
 
 | 文件 | 行数 | 说明 |
 |------|------|------|

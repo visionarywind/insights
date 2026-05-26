@@ -1,49 +1,87 @@
-# muMemPrefetchAsync — 异步内存预取
+# muMemPrefetchAsync — 当前实现为参数校验路径
 
-> 源码文件：`musa/src/driver/mu_memory.cpp` (预取 API), `musa/src/musa/core/stream.cpp` (预取命令)
+> 源码文件：`musa/src/driver/mu_memory.cpp` 中的 `muapiMemPrefetchAsync`、`muapiMemPrefetchAsync_v2`
 
-## 1. 功能概述
+## 1. 功能结论
 
-`muMemPrefetchAsync` 将指定设备内存区域的**数据预取**到指定的目标设备上，使得目标设备在后续访问该区域时可以更快地获得数据。
+当前源码中，`muMemPrefetchAsync` 不是实际的数据预取实现。函数注释明确说明这是 fake implementation，因为当前 MUSA managed memory 的同步访问不需要通过该 API 做数据搬迁。
 
-这是一个流有序的异步操作，预取命令会在 stream 中排队执行。
+因此当前实现只做以下事情：
 
-## 2. 调用链
+- 初始化平台。
+- 校验指针、大小、目标设备或 location。
+- 获取当前线程 TLS 中的 Context。
+- 解析传入的 stream 句柄。
+- 返回校验结果。
+
+当前实现不做以下事情：
+
+- 不查询 `MemoryTracker`。
+- 不检查目标内存对象的属性。
+- 不创建 `PrefetchCommand`。
+- 不调用 `Stream::CmdPrefetchAsync`。
+- 不向 stream 入队。
+- 不触发页迁移或数据搬迁。
+
+## 2. muMemPrefetchAsync 调用链
 
 ```
-muapiMemPrefetchAsync(ptr, count, dstDevice, hStream)
+muapiMemPrefetchAsync(devPtr, count, dstDevice, hStream)
   │
-  +-- InitPlatform()
+  ├─ InitPlatform()
   │
-  +-- 参数校验:
-  │     ptr != 0, count != 0, dstDevice 有效
+  ├─ 参数校验
+  │   ├─ devPtr == 0        -> MUSA_ERROR_INVALID_VALUE
+  │   ├─ count == 0         -> MUSA_ERROR_INVALID_VALUE
+  │   └─ dstDevice 非 CPU 且超出设备数量 -> MUSA_ERROR_INVALID_VALUE
   │
-  +-- TlsCtxTop() → Context*
+  ├─ TlsCtxTop()
+  │   └─ 当前线程没有 Context -> MUSA_ERROR_INVALID_CONTEXT
   │
-  +-- GetMemoryByDevicePointer(ptr, &offset) → pMemory
-  │     (通过 MemoryTracker 全局查找)
+  ├─ Context::InfoStream(ctx, hStream)
+  │   └─ stream 无效 -> MUSA_ERROR_INVALID_HANDLE
   │
-  +-- pMemory->GetProps() & DeviceMapped 校验
-  │     (仅已映射到设备的 memory 才可预取)
-  │
-  +-- 创建预取命令 → Stream::CmdPrefetchAsync() / PrefetchCommand
-  │     (将预取操作编码为 stream 中的命令)
-  │
-  +-- EncodePrefetch(目标设备, 偏移, 大小)
-        在硬件命令中编码预取语义
+  └─ return status
 ```
 
-## 3. 设计要点
+## 3. muMemPrefetchAsync_v2 调用链
 
-- **目的**: 减少 GPU 访问其他设备内存时的延迟
-- **流有序**: 预取命令与 stream 中的其他操作有序执行
-- **NUMA 优化**: 将内存预取到目标设备所在的 NUMA 节点
-- **page fault 迁移**: 对于 managed 内存, 预取会触发 page migration
+```
+muapiMemPrefetchAsync_v2(devPtr, count, location, flags, hStream)
+  │
+  ├─ InitPlatform()
+  │
+  ├─ 参数校验
+  │   ├─ devPtr == 0 -> MUSA_ERROR_INVALID_VALUE
+  │   ├─ count == 0  -> MUSA_ERROR_INVALID_VALUE
+  │   ├─ location.type == MU_MEM_LOCATION_TYPE_INVALID
+  │   │   -> MUSA_ERROR_INVALID_VALUE
+  │   ├─ location.type > MU_MEM_LOCATION_TYPE_HOST_NUMA_CURRENT
+  │   │   -> MUSA_ERROR_INVALID_VALUE
+  │   └─ location.type == DEVICE 且 location.id 超出设备数量
+  │       -> MUSA_ERROR_INVALID_VALUE
+  │
+  ├─ TlsCtxTop()
+  │   └─ 当前线程没有 Context -> MUSA_ERROR_INVALID_CONTEXT
+  │
+  ├─ Context::InfoStream(ctx, hStream)
+  │   └─ stream 无效 -> MUSA_ERROR_INVALID_HANDLE
+  │
+  └─ return status
+```
 
-## 4. 相关源码位置
+## 4. 验证日志
 
-| 文件 | 说明 |
-|------|------|
-| `musa/src/driver/mu_memory.cpp` | API 入口 |
-| `musa/src/musa/core/stream.cpp` | 预取命令实现 |
-| `musa/src/musa/core/command/prefetchCommand.h` | 预取命令类 |
+使用 `MUSA_DRIVER_CALLFLOW_DEBUG=1` 执行最小用例后，日志显示该 API 只解析 Context 和 Stream：
+
+```text
+muapiMemPrefetchAsync enter ptr=0x1000c400000 count=1024 dstDevice=0 stream=0x...
+muapiMemPrefetchAsync fake path resolved context=0x... stream=0x... no command is queued
+muapiMemPrefetchAsync exit status=0
+```
+
+日志中没有 `Stream::CmdPaging`、`PrefetchCommand`、`MemoryPool::ModifyAccess` 或其他 stream command 提交记录。
+
+## 5. 阅读结论
+
+分析当前版本时，应把 `muMemPrefetchAsync` 视为兼容性 API。它能够检查参数和 stream 句柄，但不改变内存位置、访问权限或 stream 命令队列。

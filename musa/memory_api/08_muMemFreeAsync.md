@@ -6,7 +6,9 @@
 
 ## 1. 功能概述
 
-在指定的 stream 上**异步**释放内存。释放操作被编码为 stream 中的 **CallbackCommand**，在 stream 执行到该命令时完成释放。
+在指定的 stream 上释放内存。对 `memoryTypeVirtual` 且带 pool 的内存，当前源码会先入队 `PagingCommand` 禁用 GPU 访问，再入队 `CallbackCommand` 执行实际释放。两类命令都通过同一个 stream 保持顺序。
+
+对 `memoryTypeGeneral`、`memoryTypePitchedGeneral`、`memoryTypeManaged`，当前源码会调用 `memory->Synchronize()` 后直接 `DestroyMemory()`，不是完整的 stream-ordered 异步释放。
 
 ## 2. Driver 入口源码逐行分析
 
@@ -56,10 +58,10 @@ MUresult muapiMemFreeAsync(MUdeviceptr dptr, MUstream hStream)
             case Musa::memoryTypeIpcImport:
             case Musa::memoryTypeExternal:
                 // IPC Import / External → 同步销毁
-                // ⚠ 注意: 这两个类型在 sync API 中是被拒绝的
-                //   但在 async 路径中却允许
-                // ⚠ DestroyMemory 仅从 ctx 列表移除, 不释放 KMD 资源
-                //   (资源归属导出进程)
+                // 注意: 这两个类型在 sync API 中不属于普通释放白名单，
+                // 但 async 路径会进入 DestroyMemory。
+                // DestroyMemory 负责从 Context 和 MemoryTracker 中注销对象；
+                // 底层资源所有权取决于导入/外部句柄语义。
                 status = pContext->DestroyMemory(memory);
                 break;
 
@@ -67,8 +69,8 @@ MUresult muapiMemFreeAsync(MUdeviceptr dptr, MUstream hStream)
             case Musa::memoryTypePitchedGeneral:
             case Musa::memoryTypeManaged:
                 // General/PitchedGeneral/Managed → 同步等待 + 销毁
-                // ⚠ ISSUE: 名义上是 "async", 但实际上
-                //   Synchronize() 等待的是默认流 (不是 hStream!)
+                // 当前路径会调用 Synchronize()，不是完整的 stream-ordered
+                // 异步释放。
                 status = memory->Synchronize();     // [memory.cpp:115]
                 if (status == MUSA_SUCCESS) {
                     status = memory->GetContext()
@@ -101,19 +103,16 @@ MUresult muapiMemFreeAsync(MUdeviceptr dptr, MUstream hStream)
 }
 ```
 
-### 死代码/问题标注
+### 实现差异标注
 
 ```
-⚠ ISSUE 1: General/PitchedGeneral/Managed 类型的 async 释放
-   实际上是同步的 (memory->Synchronize() 等待默认流)
-   不是真正的异步释放, 与函数名不符
+1. General/PitchedGeneral/Managed 类型：
+   muMemFreeAsync 会先调用 memory->Synchronize()，再调用 DestroyMemory()。
+   这条路径不是完整的 stream-ordered 异步释放。
 
-⚠ ISSUE 2: IPC Import / External 类型在此进入 DestroyMemory
-   但 DestroyMemory 仅从 ctx 列表中移除对象
-   不释放底层 KMD 资源 (资源属于导出进程)
-   这可能导致导出端释放后, 导入端仍持有引用
-   (虽然 ExportIpcHandle 会缓存 global handle, 避免重复导出,
-    但 Import 端从未通知 Export 端取消导出)
+2. IPC Import / External 类型：
+   muMemFreeAsync 会进入 DestroyMemory()。
+   DestroyMemory 负责注销 Context 和 MemoryTracker 中的对象记录。
 ```
 
 ## 3. 路径 A: Virtual 内存释放 (核心路径)
@@ -156,9 +155,12 @@ MUresult Stream::AsyncMemFree(uint64_t virtAddress, bool blocking)
     // ── Step 2: 禁用 GPU 对虚拟页的访问 ──
     status = pPool->DisableAccess(virt, physical,
                                   blocking, this);       // [memoryPool.h]
-    //   ↑ 发送 PagingCommand (GPU page table update)
-    //   ↑ 将对应虚拟页的访问权限设为 NONE
-    //   ↑ 此步骤需要等待对应的 stream 命令执行完成
+    // 调用链:
+    //   MemoryPool::DisableAccess
+    //   → Stream::CmdPaging
+    //   → PagingCommand::Submit
+    // 作用:
+    //   将对应虚拟页的访问权限设为 NONE
 
     // ── Step 3: 创建流完成回调 ──                       [stream.cpp:611-626]
     if (status == MUSA_SUCCESS) {
@@ -196,9 +198,8 @@ MUresult Stream::AsyncMemFree(uint64_t virtAddress, bool blocking)
 
         status = m_ParentCtx->ResolveDependencyAndQueueCommand(
             move(command), this, blocking);
-        //   ↑ 将 CallbackCommand 插入 stream 命令列表
-        //   ↑ 依赖关系自动处理
-        //   ↑ stream 执行到此命令时, callback 被调用
+        // 将 CallbackCommand 插入 stream 命令列表。
+        // stream 执行到该命令时，callback 被调用。
     }
 
     return status;
@@ -259,7 +260,7 @@ IsGraphAlloc() 返回 false 的情况:
 ┌─────────────────────┬────────────────────────┬────────────────────────┐
 │      特性           │  muMemFree (同步)       │  muMemFreeAsync        │
 ├─────────────────────┼────────────────────────┼────────────────────────┤
-│ 释放时机            │ 立即等待完成            │ Stream 执行到该命令时   │
+│ 释放时机            │ 立即等待完成            │ Virtual 路径由 PagingCommand 与 CallbackCommand 排序完成 │
 │ Synchronize()       │ 显式调用                │ 仅 General 类型调用     │
 │ DisableAccess       │ 不需要 (直接销毁)       │ 需要 (PagingCommand)    │
 │ 回调                │ 不需要                 │ CallbackCommand         │
@@ -269,7 +270,28 @@ IsGraphAlloc() 返回 false 的情况:
 └─────────────────────┴────────────────────────┴────────────────────────┘
 ```
 
-## 8. 相关源码位置
+## 8. 日志验证结果
+
+最小用例 `memory_api_callflow_demo.cpp` 打开 `MUSA_DRIVER_CALLFLOW_DEBUG=1` 后确认了 `memoryTypeVirtual` 的释放顺序：
+
+```text
+muapiMemFreeAsync
+  -> Stream::CmdMemFree
+  -> Stream::AsyncMemFree
+  -> MemoryPool::DisableAccess
+  -> Stream::CmdPaging
+  -> PagingCommand::Submit
+  -> CallbackCommand::Submit
+```
+
+`CallbackCommand::Submit` 执行 callback 后，callback 内部调用：
+
+```text
+virt->DestroyPhysMemories()
+pPool->DestroyMemory(virt)
+```
+
+## 9. 相关源码位置
 
 | 文件 | 行数 | 说明 |
 |------|------|------|

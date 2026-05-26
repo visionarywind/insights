@@ -96,15 +96,37 @@ MUresult muapiMemHostAlloc(void **pp, size_t bytesize,
 ## 4. MemoryCreateInfo 到 HAL 的完整链路
 
 ```
-Context::CreateMemory(&pMemory, createInfo)                  [context.cpp:915]
+muapiMemHostAlloc(pp, bytesize, Flags)                       [mu_memory.cpp]
+  │
+  └─ imuapiMemHostAlloc(pp, bytesize, Flags)
+      │
+      ├─ InitPlatform()
+      ├─ flags 掩码校验
+      ├─ TlsCtxTop()
+      ├─ 构造 MemoryCreateInfo
+      │   ├─ type = memoryTypePinnedHost
+      │   ├─ pinnedHost.size = bytesize
+      │   └─ pinnedHost.flags = Flags
+      │      | MU_MEMORY_HOSTALLOC_NUMA_AFFINITIVE
+      │      | MU_MEMORY_HOSTALLOC_SUBALLOCATABLE
+      │
+      └─ IContext::CreateMemory(&pMemory, createInfo)
+          │
+          └─ Context::CreateMemory(&pMemory, createInfo)      [context.cpp]
   │
   ├─ (通用流程已在 01 中详述，此处聚焦 PinnedHost 分叉)
   │
-  └─ pMemory->Init(createInfo)                               [memory.cpp:378]
+  └─ pMemory->Init(createInfo)                                [memory.cpp]
         │
-        ├─ m_Type = memoryTypePinnedHost                      [memory.cpp:392]
+        ├─ m_Type = memoryTypePinnedHost
         │
-        └─ PinnedHostAlloc(size, flags, numaId)              [memory.cpp:532]
+        └─ PinnedHostAlloc(size, flags, numaId)
+            │
+            ├─ 校验设备能力
+            ├─ 构造 Hal::MemoryCreateInfo
+            └─ 分支:
+                ├─ SubAllocatable -> Hal::MemMgr::Allocate(...)
+                └─ 非 SubAllocatable -> Hal::CreateMemory(...)
 ```
 
 ## 5. PinnedHostAlloc 源码逐行分析
@@ -312,7 +334,22 @@ LargePage 堆资源有限, 当系统无法提供大页时, 直接降级到 Gener
 | MMIO 支持 | ❌ | ✅ (IOMEMORY flag) |
 | 页对齐 | 由 KMD 处理 | HAL 层 AlignUp 到页边界 |
 
-## 9. 相关源码位置
+## 9. 日志验证结果
+
+最小用例 `memory_api_callflow_demo.cpp` 打开 `MUSA_DRIVER_CALLFLOW_DEBUG=1` 后确认入口层级：
+
+```text
+imuapiMemHostAlloc
+  -> TlsCtxTop
+  -> IContext::CreateMemory
+  -> Context::CreateMemory
+  -> Memory::Init
+  -> Memory::PinnedHostAlloc
+```
+
+本次用例中传入 flags 为 `0x0`，运行时追加后的 pinned host flags 为 `0x180000`，对应内部 NUMA 亲和和子分配能力标记。
+
+## 10. 相关源码位置
 
 | 文件 | 行数 | 说明 |
 |------|------|------|

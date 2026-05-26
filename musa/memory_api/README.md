@@ -12,14 +12,15 @@
 | 04 | `04_muMemHostRegister_v2.md` | `muMemHostRegister` | `mu_memory.cpp:611`, `core/memory.cpp:611`, `hal/memory.cpp:590` |
 | 05 | `05_muMemcpyHtoD_v2.md` | `muMemcpy*` 全系列 (HtoD/DtoH/DtoD/Peer/2D/Array/Batch) | `mu_memory.cpp:13-1156`, `core/context.cpp:699`, `core/stream.cpp:663` |
 | 06 | `06_muMemsetD32_v2.md` | `muMemsetD8/D16/D32` | `core/context.cpp:733`, `core/stream.cpp:721` |
-| 07 | `07_muMemAllocAsync.md` | `muMemAllocAsync` / `muMemAllocFromPoolAsync` | `mu_memory.cpp:303`, `core/stream.cpp:519` |
-| 08 | `08_muMemFreeAsync.md` | `muMemFreeAsync` | `mu_memory.cpp:386`, `core/stream.cpp:601`, `core/memory.cpp:358` |
+| 07 | `07_muMemAllocAsync.md` | `muMemAllocAsync` / `muMemAllocFromPoolAsync` | `mu_memory.cpp:303`, `core/stream.cpp:519`, `core/memoryPool.cpp:ModifyAccess`, `command/pagingCommand.cpp` |
+| 08 | `08_muMemFreeAsync.md` | `muMemFreeAsync` | `mu_memory.cpp:386`, `core/stream.cpp:601`, `core/memoryPool.cpp:DisableAccess`, `command/pagingCommand.cpp`, `command/callbackCommand.cpp` |
 | 09 | `09_usage_patterns.md` | 内部调用者分析 (Graph/Peer/IPC/Export) | 多文件交叉引用 |
 | 10 | `10_CreateMemory_and_MapToPeers.md` | `CreateMemory` + `MapToPeers` 统一入口 | `core/context.cpp:915`, `core/context.cpp:483` |
 | 11 | `11_GeneralAlloc_deep_dive.md` | 通用设备内存分配深度拆解 | `core/memory.cpp:462`, `memMgr.cpp:81`, `memoryPool.cpp:82-413` |
 | 12 | `12_DirectKMD_Allocation_flow.md` | 裸 KMD 分配 (Linux DRM + Windows WDDM2) | `hal/memory.cpp:366-836` |
 | 13 | `13_MemoryPool_deep_dive.md` | MemoryPool 子分配算法 (4 个执行示例) | `hal/memoryPool.cpp` 全文件 |
 | 14 | `14_Memory_API_source_deep_dive.md` | Core 层 9 种分配路径逐函数分析 | `core/memory.cpp` 全文件 |
+| 15 | `memory_api_callflow_validation.md` | Memory API 调用链埋点验证 | `MUSA_DRIVER_CALLFLOW_DEBUG` 日志 |
 
 ## 三层内存分配器架构
 
@@ -84,7 +85,7 @@
 1. **RAII**: Memory 析构自动释放 HAL 资源 (包括 Sub-Allocation 归还 Pool)
 2. **双重释放防护**: 类型白名单 + offset==0 校验
 3. **析构双路径**: `SubAllocatable` 属性决定走 `Pool::Free` 还是 `Destroy()`
-4. **流式分配**: Async 版本将分配编码为 Stream 命令 (Graph 场景必需)
+4. **流式分配**: `muMemAllocAsync` 正常路径在 API 调用期间创建虚拟/物理内存并完成绑定，stream 中排序执行的是页表访问权限更新 `PagingCommand`；Graph Capture 路径记录图节点。
 5. **自动 Peer 映射**: CreateMemory 后自动在所有已启用 Peer 的设备上建立映射
 6. **惰性释放**: TrimPool 按阈值释放空闲 chunk, 减少 GPU 显存碎片
 
@@ -94,6 +95,9 @@
 - `musa/src/musa/core/memory.cpp` — Core 层初始化函数 (827 行)
 - `musa/src/musa/core/context.cpp` — CreateMemory/MapToPeers/DestroyMemory (1431+ 行)
 - `musa/src/musa/core/stream.cpp` — AsyncMemAlloc/AsyncMemFree/Command 提交 (1266+ 行)
+- `musa/src/musa/core/memoryPool.cpp` — `ModifyAccess` / `DisableAccess` 触发 `Stream::CmdPaging`
+- `musa/src/musa/core/command/pagingCommand.cpp` — 页表访问权限更新命令
+- `musa/src/musa/core/command/callbackCommand.cpp` — 异步释放回调命令
 - `musa/src/hal/m3d/memory.cpp` — HAL 层内存初始化全路径 (838 行)
 - `musa/src/hal/m3d/memoryPool.cpp` — Sub-Allocation 算法 (533 行)
 - `musa/src/hal/m3d/memMgr.cpp` — Pool 管理/创建/查找 (237 行)
