@@ -249,6 +249,26 @@ device synchronize
 | `critSM` | critical 分区实际 SM 数 |
 | `bulkSM` | bulk 分区实际 SM 数 |
 
+`create(us)` 不是单个 `muGreenCtxCreate()` 或 `cuGreenCtxCreate()` 的耗时。当前用例测量
+一对 critical+bulk Green Context 的完整生命周期，包含：
+
+```text
+critical Green Context create
+bulk Green Context create
+ctxFromGreenCtx
+ctxSetCurrent
+Green Context stream create
+Green Context resource query
+nop kernel warmup launch
+stream synchronize
+device synchronize
+stream destroy
+Green Context destroy
+```
+
+因此，`create(us)` 只能解释为 lifecycle pair 成本，不能直接归因到 `criticalSM`
+数量本身。
+
 ## 6. 端到端流程
 
 ### 6.1 Green Context 创建流程
@@ -562,6 +582,61 @@ CUDA latency 结果：
 - 在 RTX 3060 上，`primaryBulkOnly` 也接近 solo latency，说明该平台在 bulk block 数不占满全卡时，
   primary context 已能给 critical workload 留出调度空间。该结果不影响 Green Context 用例的有效性，
   但说明不同 GPU 的对照项解释应结合 SM 数量和 occupancy 参数。
+
+### 8.7 create 成本差异分析
+
+从当前结果看，`create(us)` 有两个层面的差异。
+
+第一，`criticalSM=8` 与 `criticalSM=16` 的均值差异主要受长尾影响，不能直接解释为
+SM 数量越少或越多导致 create 更慢。
+
+CUDA 同规格结果：
+
+| criticalSM | create(us) Mean | create(us) Min | create(us) Max |
+|---:|---:|---:|---:|
+| 8 | 2276.77 | 1945.41 | 8219.20 |
+| 16 | 1957.23 | 1944.40 | 1968.37 |
+
+`criticalSM=8` 的 min 与 `criticalSM=16` 接近，均在 1.9 ms 左右。`criticalSM=8`
+出现一次 8.2 ms 长尾，拉高了 mean。
+
+MUSA 同规格结果：
+
+| criticalSM | create(us) Mean | create(us) Min | create(us) Max |
+|---:|---:|---:|---:|
+| 8 | 8464.58 | 7891.31 | 15028.70 |
+| 16 | 8285.29 | 8253.60 | 8438.41 |
+
+`criticalSM=8` 同样存在一次 15 ms 级别长尾。只看 mean 容易误判，后续应同时输出
+p50、p90 和 max。
+
+第二，MUSA 与 CUDA 的平台差异更明显：
+
+| 后端 | create pair 量级 |
+|---|---:|
+| CUDA / RTX 3060 | 约 2 ms |
+| MUSA / S5000 | 约 8 ms |
+
+该差异说明 MUSA 的 Green Context 生命周期路径整体开销更高，但当前指标还不能说明
+高在哪一层。原因是 `create(us)` 包含 resource desc、Green Context create、context
+转换、stream create、warmup launch/sync、destroy 等多个步骤。
+
+如果要定位差异来源，应将 lifecycle 计时拆成以下分项：
+
+| 分项 | 说明 |
+|---|---|
+| `T_desc` | `muDevResourceGenerateDesc` / `cuDevResourceGenerateDesc` |
+| `T_green_ctx_create` | `muGreenCtxCreate` / `cuGreenCtxCreate` |
+| `T_ctx_from_green_ctx` | `muCtxFromGreenCtx` / `cuCtxFromGreenCtx` |
+| `T_ctx_set_current` | `muCtxSetCurrent` / `cuCtxSetCurrent` |
+| `T_stream_create` | `muGreenCtxStreamCreate` / `cuGreenCtxStreamCreate` |
+| `T_get_resource` | `muGreenCtxGetDevResource` / `cuGreenCtxGetDevResource` |
+| `T_warmup_launch_sync` | `nop_kernel` launch 和 stream synchronize |
+| `T_stream_destroy` | `muStreamDestroy` / `cuStreamDestroy` |
+| `T_green_ctx_destroy` | `muGreenCtxDestroy` / `cuGreenCtxDestroy` |
+
+建议后续将 `createDestroyPair` 扩展为分项计时版本，输出 p50、p90、max，避免单次冷启动
+或偶发调度长尾影响判断。
 
 ## 9. 当前构建限制
 
