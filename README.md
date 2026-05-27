@@ -18,6 +18,14 @@ insights/
     ├── 技术洞察报告.md                       # ~313 行，三层分配器、Sub-Allocation、KMD 路径
     ├── 能力边界分析.md                       # ~320 行，musa 文档覆盖 vs MUSA Driver 全 API 面
     └── 架构图.md                            # 五层架构：API → Core → HAL → M3D → KMD，memMgr+MemoryPool Sub-Alloc
+├── msight-compute/                           # MUSA GPU Profiler 工具链分析
+│   └── 技术洞察报告.md                       # ~200 行，模块架构、数据流、MUPTI 集成、QLCS 对比
+└── musa_benchmarks/                          # GPU 性能基准测试框架 + Green Context 用例
+    ├── musa_benchmarks-技术洞察.md            # Celero 框架、5 个 suite、评分系统、基线数据库
+    ├── musa_benchmarks-构建架构与产物分析.md   # CMake 构建、双平台编译、产物清单
+    └── green-context/
+        ├── 代码解读.md                        # gree_context_test.mu 逐行解读
+        └── GreenContext-性能看护用例设计.md    # 4 个回归 case 设计 + 上库 8 步流程
 ```
 
 ---
@@ -47,13 +55,35 @@ insights/
 | | [架构图](musa/架构图.md)：五层整体架构（API → Core → HAL → M3D → KMD），memMgr 池管理、MemoryPool 子分配算法、10 种内存类型速查、muMemAlloc 7 步完整调用链 |
 | **关键词** | 内存分配器, Sub-Allocation, MemoryPool, KMD, ioctl, Peer 映射, DRM, WDDM2, 碎片管理, 惰性释放, 能力边界, API 覆盖率, 调用栈深度 |
 
+### 3. msight-compute GPU Profiler 工具链
+
+| 条目 | 说明 |
+|------|------|
+| **位置** | `msight-compute/技术洞察报告.md` |
+| **分析对象** | `/home/shanfeng/workspace/msight-compute/` |
+| **版本** | 1.3.0，C++17/CMake/Qt6 |
+| **内容覆盖** | 项目结构全景、9 个核心模块（profiler/capture/injection/report/mt_rules/mupti_api）、两种 Profiling 模式（Direct/Injection）、MUPTI API 动态加载封装、protobuf 数据模型、CLI+GUI 双入口、与 musa/MUSA-Runtime/MUPTI 的分层协作关系 |
+| **关键词** | Nsight Compute 对标, MUPTI, kernel profiling, roofline, timeline, PC sampling, app replay, .mcu-rep |
+
+### 4. musa_benchmarks GPU 性能基准测试
+
+| 条目 | 说明 |
+|------|------|
+| **位置** | `musa_benchmarks/`（2 份技术文档 + green-context 分析） |
+| **分析对象** | `/workspace/workspace/musa_benchmarks/` |
+| **内容覆盖** | [技术洞察](musa_benchmarks/musa_benchmarks-技术洞察.md)：Celero 框架三层循环、6 个测试 suite（memoryOps/graphAndSchedule/mulStreams/musaOnly/resourceManage/multicards）、UDM 统计模型、对数评分体系 (`score = 1 + log10(test/baseline)`)、双平台编译（MUSA+CUDA）、基线数据库（A100/H100/W7900/S5000） |
+| | [构建架构与产物分析](musa_benchmarks/musa_benchmarks-构建架构与产物分析.md)：CMake 全局架构、MCC/NVCC/G++ 三种编译模式、GPU 架构自动检测（lspci→mp_xx）、公共库 `benchmark_common`、ELF/PTX 辅助文件、bigModule 产物、批量运行与评分脚本流水线 |
+| | [Green Context 代码解读](musa_benchmarks/green-context/代码解读.md)：`gree_context_test.mu` 669 行逐段分析，两个测试（SM Provisioning + 隔离性能验证），MP 独占（192 KiB smem）、host-GPU 同步、DCE 防护、三选一 PASS 判定 |
+| | [Green Context 性能看护设计](musa_benchmarks/green-context/GreenContext-性能看护用例设计.md)：4 个回归 case（创建开销/分区精确性/launch 延迟/隔离性能），完整的 Celero 代码模板、8 步上库流程（创建→autorun.py→TestSuitConfig→基线→验证→提交） |
+| **关键词** | Celero, benchmark, 性能回归, 评分系统, Green Context, SM 分区, UDM, CSV baseline |
+
 ---
 
 ## 后续扩展
 
 本目录将持续扩展。计划中的洞察方向：
 
-- **MUSA Driver (linux-ddk/musa/)** — Driver API 入口、HAL 层、m3d 实现
 - **Kernel Mode Driver (linux-ddk/gr-kmd/)** — 内核侧 GPU 内存管理、调度器
 - **SGLang MUSA 后端** — LLM 推理引擎的 MUSA 适配层 (sglang/sgl-kernel/)
 - **Conformance Test Suite (musa_cts/)** — 测试架构与覆盖分析
+- **msight-compute 深度分析** — MUPTI callback 时序、App Replay 机制、metrics YAML 规则引擎
