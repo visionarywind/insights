@@ -4,8 +4,8 @@
 
 | 文档 | 用途 |
 |---|---|
-| `insights/okr/okr-2026.md` | OKR 原始要求 |
-| `insights/okr/okr-2026-landing-plan.md` | 白盒软件性能建模落地方案 |
+| `insights/okr/01-原始OKR.md` | OKR 原始要求 |
+| `insights/okr/94-参考-早期完整落地方案.md` | 白盒软件性能建模落地方案 |
 | `insights/mupti/MUSA-Runtime-MUPTI-技术洞察.md` | Runtime 侧 MUPTI 实现分析 |
 | `insights/mupti/musa-Driver-MUPTI-技术洞察.md` | Driver 侧 MUPTI 实现分析 |
 

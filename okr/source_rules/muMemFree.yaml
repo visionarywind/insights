@@ -1,32 +1,51 @@
-api: muMemFree
+api: muMemFree_v2
 phase: M1
 runtime_api: musaFree
 entry:
-  runtime: MUSA-Runtime/src/musa_memory.cpp
-  driver: linux-ddk/musa/src/driver/mu_memory.cpp
+  runtime: MUSA-Runtime/src/musa_memory.cpp: musaapiFree
+  runtime_wrapper: MUSA-Runtime/src/musa_wrappers_generated.cpp
+  driver: linux-ddk/musa/src/driver/mu_memory.cpp: muapiMemFree_v2
 core_path:
-  - linux-ddk/musa/src/driver/mu_memory.cpp: muapiMemFree
-  - linux-ddk/musa/src/musa/core/memoryPool.cpp: pool free/merge/update
+  - linux-ddk/musa/src/driver/mu_memory.cpp: muapiMemFree_v2 validates pointer and resolves Platform::GetMemoryByDevicePointer
+  - linux-ddk/musa/src/driver/mu_memory.cpp: muapiMemFree_v2 checks memory type and offset
+  - linux-ddk/musa/src/driver/mu_memory.cpp: muapiMemFree_v2 calls IMemory::Synchronize before release
+  - linux-ddk/musa/src/driver/mu_memory.cpp: non-virtual memory calls IContext::DestroyMemory
+  - linux-ddk/musa/src/musa/core/context.cpp: Context::DestroyMemory removes memory from context and deletes it
+  - linux-ddk/musa/src/driver/mu_memory.cpp: virtual memory with pool resolves default stream and calls IStream::CmdMemFree blocking=true
+  - linux-ddk/musa/src/musa/core/stream.cpp: Stream::CmdMemFree dispatches to CaptureMemFree or AsyncMemFree depending on capture state
+  - linux-ddk/musa/src/musa/core/stream.cpp: Stream::AsyncMemFree calls MemoryPool::DisableAccess and queues CallbackCommand for deferred destroy
 state_variables:
   - context_id
   - ptr
   - size
+  - memory_type
+  - offset
   - pool_id
-  - merge
+  - status
 model_events:
   - RUNTIME_API_SPAN
   - DRIVER_API_SPAN
-  - MEM_POOL_FREE_SPAN
+  - MEM_FREE_LOOKUP_SPAN
+  - MEM_FREE_TYPE_DECISION
+  - MEMORY_SYNCHRONIZE_SPAN
+  - CONTEXT_DESTROY_MEMORY_SPAN
+  - MEM_POOL_DISABLE_ACCESS_SPAN
+  - MEM_FREE_CALLBACK_COMMAND_CREATE_SPAN
   - API_MEMORY_RELATION
 cost_terms:
   - runtime_us
   - driver_us
   - memory_lookup_us
-  - pool_free_us
-  - free_merge_us
-  - pool_update_us
+  - type_check_us
+  - synchronize_us
+  - context_destroy_us
+  - pool_disable_access_us
+  - callback_queue_us
   - unknown_us
 validation:
-  benchmark: repeated musaMalloc/musaFree with pool reuse
-  allocation_relation: ptr/size/pool_id
+  benchmark: repeated musaMalloc/musaFree with general memory plus async/pool allocation cases for virtual memory branch
+  allocation_relation: ptr/size/memory_type/pool_id/status
   unknown_ratio: "<=0.15"
+notes:
+  - The common musaMalloc -> musaFree path is general memory and releases through Context::DestroyMemory.
+  - MemoryPool::DisableAccess and CallbackCommand are only on the virtual-memory-with-pool branch.

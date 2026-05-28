@@ -13,7 +13,7 @@
 | `MUPTI` | 统一采集通道、callback/activity、hook/accessor、collector、schema、flush 与 overhead 验证 | 当前 MUPTI 缺少内部软件成本事件；需要新增 ModelEvent 通路或 private hook |
 | `musa_benchmarks` | 成本校准、插桩开销验收、行为 CTS、跨版本回归基线 | 当前 OKR 主方案没有把它纳入交付链路 |
 
-`insights/okr/okr-2026-landing-plan.md` 已经比早期 replay 方案更接近正确方向。`insights/simulation/okr/musa_driver_api_perf_model_landing_plan.md` 仍以 trace replay 为第一阶段，应降级为离线验证工具，不应作为 OKR 主方案。
+`insights/okr/94-参考-早期完整落地方案.md` 已经比早期 replay 方案更接近正确方向。`insights/simulation/okr/musa_driver_api_perf_model_landing_plan.md` 仍以 trace replay 为第一阶段，应降级为离线验证工具，不应作为 OKR 主方案。
 
 ## 四个仓库技术洞察复审
 
@@ -229,7 +229,7 @@ T_api =
 
 ## 对当前文档的处理建议
 
-1. 保留 `insights/okr/okr-2026-landing-plan.md`，但补充四仓库分工、`musa_benchmarks` 校准链路、MUPTI repo 交付项。
-2. 保留 `insights/okr/MUPTI埋点性能建模技术方案.md`，继续作为 ModelEvent 和 collector 设计依据。
+1. 保留 `insights/okr/94-参考-早期完整落地方案.md`，但补充四仓库分工、`musa_benchmarks` 校准链路、MUPTI repo 交付项。
+2. 保留 `insights/okr/04-MUPTI-ModelEvent技术方案.md`，继续作为 ModelEvent 和 collector 设计依据。
 3. 将 `insights/simulation/okr/musa_driver_api_perf_model_landing_plan.md` 标注为早期 replay 方案。后续只复用 trace schema、linker、validator，不再作为 OKR 主路径。
 4. 每个 Top90 API 增加独立 source rule 文件或表格，格式固定为：API、源码路径、状态转移、事件签名、payload、成本项、验证用例。

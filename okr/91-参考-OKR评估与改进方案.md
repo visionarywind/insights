@@ -197,7 +197,7 @@ validation_case:
 
 ```text
 source_rules/
-model_event_schema.md
+20-ModelEvent-Schema.md
 top90_api_coverage_report.md
 api_cost_terms_matrix.csv
 ```
@@ -436,7 +436,7 @@ CTS 能复现关键软件行为并校验事件签名。
 | --- | --- |
 | `workload_matrix.yaml` | 固定 3 个模型场景和运行参数 |
 | `run_metadata.yaml` | 保证结果可复现 |
-| `model_event_schema.md` | 固定事件 domain、event id、payload |
+| `20-ModelEvent-Schema.md` | 固定事件 domain、event id、payload |
 | `source_rules/` | 固定每个 API 的源码规则 |
 | `mupti_model_collector` | 统一采集 API、activity、ModelEvent |
 | `relation_builder` | 重建 API、command、submission、kernel 关系 |

@@ -1,37 +1,45 @@
-api: muMemAlloc
+api: muMemAlloc_v2
 phase: M1
 runtime_api: musaMalloc
 entry:
-  runtime: MUSA-Runtime/src/musa_memory.cpp
-  driver: linux-ddk/musa/src/driver/mu_memory.cpp
+  runtime: MUSA-Runtime/src/musa_memory.cpp: musaapiMalloc
+  runtime_wrapper: MUSA-Runtime/src/musa_wrappers_generated.cpp
+  driver: linux-ddk/musa/src/driver/mu_memory.cpp: muapiMemAlloc_v2
 core_path:
-  - linux-ddk/musa/src/driver/mu_memory.cpp: muapiMemAlloc
-  - linux-ddk/musa/src/musa/core/memoryPool.cpp: pool lookup/alloc/grow
-  - linux-ddk/musa/src/hal: HAL memory allocate/map
+  - linux-ddk/musa/src/driver/mu_memory.cpp: muapiMemAlloc_v2 validates dptr/bytesize and resolves TlsCtxTop
+  - linux-ddk/musa/src/driver/mu_memory.cpp: muapiMemAlloc_v2 builds MemoryCreateInfo with memoryTypeGeneral and HAL virtual/device-mapped/sub-allocatable flags
+  - linux-ddk/musa/src/musa/core/context.cpp: Context::CreateMemory allocates Memory object, calls Memory::Init, and registers memory in context critical data
+  - linux-ddk/musa/src/musa/core/memory.cpp: Memory::Init performs backing allocation / mapping for the requested MemoryCreateInfo
 state_variables:
   - context_id
   - device_id
   - ptr
   - size
-  - pool_id
-  - pool_hit
-  - grow_size
+  - memory_type
+  - memory_flags
+  - status
 model_events:
   - RUNTIME_API_SPAN
   - DRIVER_API_SPAN
-  - MEM_POOL_ALLOC_SPAN
-  - MEM_POOL_GROW_SPAN
+  - MEM_ALLOC_VALIDATE_SPAN
+  - CONTEXT_LOOKUP_SPAN
+  - MEMORY_CREATE_INFO_POINT
+  - CONTEXT_CREATE_MEMORY_SPAN
+  - MEMORY_INIT_SPAN
   - API_MEMORY_RELATION
 cost_terms:
   - runtime_us
   - driver_us
+  - validation_us
   - context_lookup_us
-  - pool_lookup_us
-  - pool_lock_us
-  - pool_hit_or_grow_us
+  - create_memory_us
+  - memory_init_us
   - hal_alloc_or_map_us
   - unknown_us
 validation:
   benchmark: musaMalloc fixed sizes + repeated allocation/free
-  allocation_relation: ptr/size/pool_id
+  allocation_relation: ptr/size/memory_type/status
   unknown_ratio: "<=0.15"
+notes:
+  - muMemAlloc_v2 is the synchronous allocation path used by musaMalloc.
+  - The current code path is not primarily MemoryPool::CreateMemory; memory pool events belong to async/pool allocation APIs covered in M2.

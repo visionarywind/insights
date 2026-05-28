@@ -45,7 +45,7 @@ trace_gap_report.md
 
 ```text
 source_rules/
-model_event_schema.md
+20-ModelEvent-Schema.md
 top90_api_coverage_report.md
 api_cost_terms_matrix.csv
 ```
