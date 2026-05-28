@@ -59,26 +59,11 @@ public:
         checkMuErrors(muDevicePrimaryCtxRetain(&m_PrimaryCtx, m_Device));
         checkMuErrors(muCtxSetCurrent(m_PrimaryCtx));
 
-        checkMuErrors(muDeviceGetDevResource(m_Device, &m_AllSm, MU_DEV_RESOURCE_TYPE_SM));
-        m_TotalSms = m_AllSm.sm.smCount;
-        m_Granularity = sm_partition_granularity(m_AllSm);
-        if (m_TotalSms < m_Granularity * 2) {
-            std::cerr << "Green Context benchmark requires at least "
-                      << (m_Granularity * 2) << " SMs, got " << m_TotalSms << std::endl;
-            std::exit(EXIT_WAIVED);
-        }
-
-        m_CriticalTarget = align_up(static_cast<unsigned int>(experimentValue.Value), m_Granularity);
-        if (m_CriticalTarget + m_Granularity > m_TotalSms) {
-            m_CriticalTarget = m_Granularity;
-        }
-
-        unsigned int nbGroups = 1;
-        // Split all SMs into two resources:
-        // - critical resource: latency-sensitive stream;
-        // - bulk resource: background load stream.
-        checkMuErrors(muDevSmResourceSplitByCount(
-            &m_CriticalSm, &nbGroups, &m_AllSm, &m_BulkSm, 0, m_CriticalTarget));
+        const auto smSplit = split_sm_resources(
+            m_Device, static_cast<unsigned int>(experimentValue.Value), true);
+        m_TotalSms = smSplit.totalSms;
+        m_CriticalSm = smSplit.critical;
+        m_BulkSm = smSplit.bulk;
         m_CriticalBlocks = static_cast<int>(m_CriticalSm.sm.smCount);
         m_BulkBlocks = static_cast<int>(m_BulkSm.sm.smCount);
         m_FullBlocks = static_cast<int>(m_TotalSms);
@@ -153,26 +138,7 @@ public:
     }
 
     float measureSoloCritical(MUstream stream, MUcontext ctx) {
-        musaStream_t runtimeStream = runtime_stream(stream);
-        checkMuErrors(muCtxSetCurrent(ctx));
-
-        musaEvent_t start{}, stop{};
-        checkMusaErrors(musaEventCreate(&start));
-        checkMusaErrors(musaEventCreate(&stop));
-        clearStartedFlags(std::max(m_CriticalBlocks, 1));
-
-        checkMusaErrors(musaEventRecord(start, runtimeStream));
-        sm_occupancy_spin_kernel<<<m_CriticalBlocks, m_ThreadsPerBlock, m_SharedBytes, runtimeStream>>>(
-            kCriticalSpinCycles, nullptr, 0, m_SharedBytes);
-        check_kernel_launch("solo critical");
-        checkMusaErrors(musaEventRecord(stop, runtimeStream));
-        checkMusaErrors(musaEventSynchronize(stop));
-
-        float ms = 0.0f;
-        checkMusaErrors(musaEventElapsedTime(&ms, start, stop));
-        checkMusaErrors(musaEventDestroy(start));
-        checkMusaErrors(musaEventDestroy(stop));
-        return ms;
+        return measureCriticalKernel(stream, ctx, "solo critical");
     }
 
     // Measure the latency of the critical kernel while another stream/context
@@ -183,13 +149,7 @@ public:
                                    int delayBlocks, MUstream criticalStream,
                                    MUcontext criticalCtx, const char* label) {
         musaStream_t delay = runtime_stream(delayStream);
-        musaStream_t critical = runtime_stream(criticalStream);
         clearStartedFlags(delayBlocks);
-
-        checkMuErrors(muCtxSetCurrent(criticalCtx));
-        musaEvent_t criticalStart{}, criticalStop{};
-        checkMusaErrors(musaEventCreate(&criticalStart));
-        checkMusaErrors(musaEventCreate(&criticalStop));
 
         checkMuErrors(muCtxSetCurrent(delayCtx));
         sm_occupancy_spin_kernel<<<delayBlocks, m_ThreadsPerBlock, m_SharedBytes, delay>>>(
@@ -199,18 +159,7 @@ public:
             std::exit(EXIT_FAILURE);
         }
 
-        checkMuErrors(muCtxSetCurrent(criticalCtx));
-        checkMusaErrors(musaEventRecord(criticalStart, critical));
-        sm_occupancy_spin_kernel<<<m_CriticalBlocks, m_ThreadsPerBlock, m_SharedBytes, critical>>>(
-            kCriticalSpinCycles, nullptr, 0, m_SharedBytes);
-        check_kernel_launch(label);
-        checkMusaErrors(musaEventRecord(criticalStop, critical));
-        checkMusaErrors(musaEventSynchronize(criticalStop));
-
-        float ms = 0.0f;
-        checkMusaErrors(musaEventElapsedTime(&ms, criticalStart, criticalStop));
-        checkMusaErrors(musaEventDestroy(criticalStart));
-        checkMusaErrors(musaEventDestroy(criticalStop));
+        const float ms = measureCriticalKernel(criticalStream, criticalCtx, label);
 
         checkMuErrors(muCtxSetCurrent(delayCtx));
         checkMusaErrors(musaStreamSynchronize(delay));
@@ -233,12 +182,9 @@ public:
 
     MUdevice m_Device{};
     MUcontext m_PrimaryCtx = nullptr;
-    MUdevResource m_AllSm{};
     MUdevResource m_CriticalSm{};
     MUdevResource m_BulkSm{};
     unsigned int m_TotalSms = 0;
-    unsigned int m_Granularity = 0;
-    unsigned int m_CriticalTarget = 0;
     int m_CriticalBlocks = 0;
     int m_BulkBlocks = 0;
     int m_FullBlocks = 0;
@@ -265,6 +211,28 @@ public:
     std::shared_ptr<UDMCount> m_ActiveBlocksPerSmCount{new UDMCount("blk/SM")};
 
 private:
+    float measureCriticalKernel(MUstream stream, MUcontext ctx, const char* label) {
+        musaStream_t runtimeStream = runtime_stream(stream);
+        checkMuErrors(muCtxSetCurrent(ctx));
+
+        musaEvent_t start{}, stop{};
+        checkMusaErrors(musaEventCreate(&start));
+        checkMusaErrors(musaEventCreate(&stop));
+
+        checkMusaErrors(musaEventRecord(start, runtimeStream));
+        sm_occupancy_spin_kernel<<<m_CriticalBlocks, m_ThreadsPerBlock, m_SharedBytes, runtimeStream>>>(
+            kCriticalSpinCycles, nullptr, 0, m_SharedBytes);
+        check_kernel_launch(label);
+        checkMusaErrors(musaEventRecord(stop, runtimeStream));
+        checkMusaErrors(musaEventSynchronize(stop));
+
+        float ms = 0.0f;
+        checkMusaErrors(musaEventElapsedTime(&ms, start, stop));
+        checkMusaErrors(musaEventDestroy(start));
+        checkMusaErrors(musaEventDestroy(stop));
+        return ms;
+    }
+
     void clearStartedFlags(int count) {
         for (int i = 0; i < count; ++i) {
             m_HostStartedFlags[i] = 0;

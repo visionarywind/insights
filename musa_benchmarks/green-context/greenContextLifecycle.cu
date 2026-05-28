@@ -55,22 +55,11 @@ public:
     void setUp(const TestFixture::ExperimentValue& experimentValue) override {
         checkMuErrors(muInit(0));
         checkMuErrors(muDeviceGet(&m_Device, 0));
-        checkMuErrors(muDeviceGetDevResource(m_Device, &m_AllSm, MU_DEV_RESOURCE_TYPE_SM));
-        m_TotalSms = m_AllSm.sm.smCount;
-        m_Granularity = sm_partition_granularity(m_AllSm);
-        if (m_TotalSms < m_Granularity * 2) {
-            std::exit(EXIT_WAIVED);
-        }
-        m_CriticalTarget = align_up(static_cast<unsigned int>(experimentValue.Value), m_Granularity);
-        if (m_CriticalTarget + m_Granularity > m_TotalSms) {
-            m_CriticalTarget = m_Granularity;
-        }
-        unsigned int nbGroups = 1;
-        checkMuErrors(muDevSmResourceSplitByCount(
-            &m_CriticalSm, &nbGroups, &m_AllSm, &m_BulkSm, 0, m_CriticalTarget));
+        const auto smSplit = split_sm_resources(
+            m_Device, static_cast<unsigned int>(experimentValue.Value), false);
+        m_CriticalSm = smSplit.critical;
+        m_BulkSm = smSplit.bulk;
     }
-
-    void tearDown() override {}
 
     std::vector<std::shared_ptr<UserDefinedMeasurement>> getUserDefinedMeasurements() const override {
         return {m_CreateDestroyUs, m_CreateThroughput, m_CriticalSmCount, m_BulkSmCount};
@@ -100,12 +89,8 @@ public:
 
 private:
     MUdevice m_Device{};
-    MUdevResource m_AllSm{};
     MUdevResource m_CriticalSm{};
     MUdevResource m_BulkSm{};
-    unsigned int m_TotalSms = 0;
-    unsigned int m_Granularity = 0;
-    unsigned int m_CriticalTarget = 0;
 
     std::shared_ptr<UDMCPUTime> m_CreateDestroyUs{
         new UDMCPUTime("create(us)", StatsView::MEAN | StatsView::MIN | StatsView::MAX)};

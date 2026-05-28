@@ -561,6 +561,19 @@ CUDA 验证注意事项：当前 CUDA 远程仓库没有预置 `build/common/lib
 结论：latency/isolation 看护路径成立；lifecycle 的低位仍约 8 ms，但存在 18 ms 级长尾，
 正式看护不宜只看 mean，建议同时保留 p50、p90、max 或至少 min/mean/max。
 
+### 8.8 代码精简后验证结果
+
+本轮精简了重复的 SM resource split 逻辑和 critical kernel 计时代码，并删除无效的
+critical `startedFlags` 清理路径。远端 `/home/shanfeng/workspace/musa_benchmarks` 已同步相同源码。
+
+验证结果：
+
+- `greenContextIsolation.cu` 与 `greenContextLifecycle.cu` 均可直接编译链接。
+- `greenContextIsolation_check_new -l` 只注册 `greenContextLatency`。
+- `greenContextLifecycle_check_new -l` 只注册 `greenContextLifecycle`。
+- MUSA / S5000 latency：`greenPartitioned` 在 `criticalSM=8/16` 下 `crit(ms)` 均约 `3.45 ms`，`*Iso≈1.00`；`primaryFullContention` 和 `primaryBulkOnly` 仍存在普通 stream 调度波动。
+- MUSA / S5000 lifecycle：`criticalSM=8` 的 `create(us)` 为 `mean=15151.42`、`min=8143.60`、`max=17601.09`；`criticalSM=16` 的 `create(us)` 为 `mean=12549.93`、`min=8536.09`、`max=19020.31`。
+
 ## 9. 当前构建限制
 
 直接编译和运行已经通过。

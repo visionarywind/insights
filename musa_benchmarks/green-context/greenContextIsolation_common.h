@@ -11,17 +11,9 @@
 #endif
 #endif
 
-#include "timer_his.h"
-
 #include <algorithm>
-#include <chrono>
 #include <cstdlib>
-#include <cstring>
 #include <iostream>
-#include <memory>
-#include <string>
-#include <thread>
-#include <vector>
 
 #ifndef EXIT_WAIVED
 #define EXIT_WAIVED 2
@@ -57,15 +49,14 @@ __global__ void sm_occupancy_spin_kernel(unsigned long long spinCycles,
                                          int* startedFlags, int marker,
                                          int sharedBytes) {
     extern __shared__ unsigned char smem[];
-    const unsigned char smemTag =
-        touch_dynamic_smem(reinterpret_cast<volatile unsigned char*>(smem), sharedBytes);
+    touch_dynamic_smem(reinterpret_cast<volatile unsigned char*>(smem), sharedBytes);
     __syncthreads();
 
     if (threadIdx.x == 0 && startedFlags != nullptr) {
         // Callers use this path only for pre-timed delay kernels; critical
         // kernels pass nullptr so flag visibility is not part of their latency.
         __threadfence_system();
-        startedFlags[blockIdx.x] = smemTag ? marker : marker;
+        startedFlags[blockIdx.x] = marker;
         __threadfence_system();
     }
 
@@ -83,6 +74,41 @@ static unsigned int align_up(unsigned int value, unsigned int alignment) {
 
 static unsigned int sm_partition_granularity(const MUdevResource& res) {
     return res.sm.smCount >= 80 ? 8 : 2;
+}
+
+struct SmResourceSplit {
+    MUdevResource all{};
+    MUdevResource critical{};
+    MUdevResource bulk{};
+    unsigned int totalSms = 0;
+    unsigned int granularity = 0;
+    unsigned int criticalTarget = 0;
+};
+
+static SmResourceSplit split_sm_resources(MUdevice dev, unsigned int requestedCriticalSms,
+                                          bool printTooSmallError) {
+    SmResourceSplit split{};
+    checkMuErrors(muDeviceGetDevResource(dev, &split.all, MU_DEV_RESOURCE_TYPE_SM));
+    split.totalSms = split.all.sm.smCount;
+    split.granularity = sm_partition_granularity(split.all);
+    if (split.totalSms < split.granularity * 2) {
+        if (printTooSmallError) {
+            std::cerr << "Green Context benchmark requires at least "
+                      << (split.granularity * 2) << " SMs, got "
+                      << split.totalSms << std::endl;
+        }
+        std::exit(EXIT_WAIVED);
+    }
+
+    split.criticalTarget = align_up(requestedCriticalSms, split.granularity);
+    if (split.criticalTarget + split.granularity > split.totalSms) {
+        split.criticalTarget = split.granularity;
+    }
+
+    unsigned int nbGroups = 1;
+    checkMuErrors(muDevSmResourceSplitByCount(
+        &split.critical, &nbGroups, &split.all, &split.bulk, 0, split.criticalTarget));
+    return split;
 }
 
 static musaStream_t runtime_stream(MUstream stream) {
