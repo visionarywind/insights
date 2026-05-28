@@ -27,14 +27,14 @@ public:
     }
 
 private:
-    std::shared_ptr<UDMCount> m_Supported{new UDMCount(*Supported)};
+    std::shared_ptr<UDMCount> m_Supported{new UDMCount("*Supported")};
 };
 
 int main(int argc, char** argv) {
-    std::cout << CUDA Green Context APIs are not available in this CUDA header set.
-              <<  Build with CUDA 12.4 or newer to enable the full benchmark.
+    std::cout << "CUDA Green Context APIs are not available in this CUDA header set."
+              << " Build with CUDA 12.4 or newer to enable the full benchmark."
               << std::endl;
-    Printer::get().TableSetPbName(criticalSM);
+    Printer::get().TableSetPbName("criticalSM");
     Run(argc, argv);
     return 0;
 }
@@ -163,7 +163,7 @@ public:
 
         checkMusaErrors(musaEventRecord(start, runtimeStream));
         sm_occupancy_spin_kernel<<<m_CriticalBlocks, m_ThreadsPerBlock, m_SharedBytes, runtimeStream>>>(
-            kCriticalSpinCycles, m_DeviceStartedFlags, 2, m_SharedBytes);
+            kCriticalSpinCycles, nullptr, 0, m_SharedBytes);
         check_kernel_launch("solo critical");
         checkMusaErrors(musaEventRecord(stop, runtimeStream));
         checkMusaErrors(musaEventSynchronize(stop));
@@ -202,7 +202,7 @@ public:
         checkMuErrors(muCtxSetCurrent(criticalCtx));
         checkMusaErrors(musaEventRecord(criticalStart, critical));
         sm_occupancy_spin_kernel<<<m_CriticalBlocks, m_ThreadsPerBlock, m_SharedBytes, critical>>>(
-            kCriticalSpinCycles, m_DeviceStartedFlags, 2, m_SharedBytes);
+            kCriticalSpinCycles, nullptr, 0, m_SharedBytes);
         check_kernel_launch(label);
         checkMusaErrors(musaEventRecord(criticalStop, critical));
         checkMusaErrors(musaEventSynchronize(criticalStop));

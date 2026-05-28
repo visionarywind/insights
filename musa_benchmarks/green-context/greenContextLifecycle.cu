@@ -26,14 +26,14 @@ public:
     }
 
 private:
-    std::shared_ptr<UDMCount> m_Supported{new UDMCount(*Supported)};
+    std::shared_ptr<UDMCount> m_Supported{new UDMCount("*Supported")};
 };
 
 int main(int argc, char** argv) {
-    std::cout << CUDA Green Context APIs are not available in this CUDA header set.
-              <<  Build with CUDA 12.4 or newer to enable the full benchmark.
+    std::cout << "CUDA Green Context APIs are not available in this CUDA header set."
+              << " Build with CUDA 12.4 or newer to enable the full benchmark."
               << std::endl;
-    Printer::get().TableSetPbName(criticalSM);
+    Printer::get().TableSetPbName("criticalSM");
     Run(argc, argv);
     return 0;
 }

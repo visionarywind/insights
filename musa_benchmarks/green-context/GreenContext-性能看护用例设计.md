@@ -322,9 +322,11 @@ sequenceDiagram
 
 ### 7.1 API 映射
 
-源码不在业务逻辑中直接写死 `musa*` 或 `cuda*`，而是在文件顶部做后端映射。
+源码以 MUSA API 为唯一源实现，不再在文件顶部维护手写双后端映射。CUDA 版本通过 `musify`
+把 MUSA Runtime / Driver API 自动转换为 CUDA Runtime / Driver API。源码中的 `TEST_ON_NVIDIA`
+仅用于 CUDA header 版本降级保护以及少量编译器属性差异，不承担完整后端抽象职责。
 
-| 抽象层 | MUSA 后端 | CUDA 后端 |
+| API 家族 | MUSA 源实现 | musify 后 CUDA 形式 |
 |---|---|---|
 | Runtime error | `musaError_t` | `cudaError_t` |
 | Runtime stream | `musaStream_t` | `cudaStream_t` |
@@ -456,7 +458,7 @@ MUSA lifecycle 结果：
 - CUDA 编译、链接、注册和运行均通过。
 - 指标与手写双后端映射版本一致：`smem(KiB)=47`、`blk/SM=1`、`primaryFullContention *Iso≈0.20`、`greenPartitioned *Iso≈1.00`。
 
-### 8.3 CUDA 重构后验证结果
+### 8.4 CUDA 重构后验证结果
 
 验证环境：
 
@@ -507,9 +509,7 @@ CUDA lifecycle 结果：
 - `primaryFullContention` 下 critical latency 明显增大，`*Iso≈0.20`。
 - `greenPartitioned` 下 critical latency 接近 solo latency，`*Iso≈1.00`。
 - lifecycle pair 成本约 `1.9–2.2 ms`，`criticalSM=8` 存在一次长尾。
-<<<<<<< HEAD
-
-### 8.4 错误检查封装整改验证
+### 8.5 错误检查封装整改验证
 
 本轮将 GreenContext 中自定义的 `CHECK_MUSA` / `CHECK_MU` 封装替换为仓库标准封装：
 
@@ -530,7 +530,7 @@ CUDA lifecycle 结果：
 
 CUDA 验证注意事项：当前 CUDA 远程仓库没有预置 `build/common/libbenchmark_common.a`，本轮在 `/tmp/green_common_cuda_check` 临时编译 common 静态库完成直连验证；另外 CUDA 侧需要使用 musify 后的 helper 头参与编译验证，MUSA 源码本身不保留手写 CUDA/MUSA 条件映射。
 
-### 8.5 create 成本差异分析
+### 8.6 create 成本差异分析
 
 从重构后结果看，MUSA 与 CUDA 的 lifecycle pair 成本量级仍存在明显差异：
 
@@ -542,42 +542,24 @@ CUDA 验证注意事项：当前 CUDA 远程仓库没有预置 `build/common/lib
 `create(us)` 仍是完整 critical+bulk Green Context lifecycle pair 成本，包含 resource desc、Green Context create、context 转换、stream create、warmup launch/sync、destroy 等多个步骤，不能直接归因到某一个 API。
 
 如果后续要定位成本来源，建议将 lifecycle 计时拆成分项：`T_desc`、`T_green_ctx_create`、`T_ctx_from_green_ctx`、`T_ctx_set_current`、`T_stream_create`、`T_get_resource`、`T_warmup_launch_sync`、`T_stream_destroy`、`T_green_ctx_destroy`，并输出 p50、p90、max。
-=======
->>>>>>> ef2df34 (add doc)
 
-### 8.4 错误检查封装整改验证
+### 8.7 2026-05-28 复查结果
 
-本轮将 GreenContext 中自定义的 `CHECK_MUSA` / `CHECK_MU` 封装替换为仓库标准封装：
-
-- Runtime API 统一使用 `checkMusaErrors(...)`。
-- Driver API 统一使用 `checkMuErrors(...)`。
-- `greenContextIsolation_common.h` 新增引用 `helper_musa.h` 与 `helper_musa_drvapi.h`。
-- 删除自定义 `check_musa_errors`、`check_mu_errors` 以及 `CHECK_MUSA` / `CHECK_MU` 宏。
-- 检查 `greenContextIsolation_common.h`、`greenContextIsolation.cu`、`greenContextLifecycle.cu` 后，未发现上述自定义封装残留。
+复查对象为远端 `/home/shanfeng/workspace/musa_benchmarks` 中的 `schedule/greenContextIsolation.cu`
+和 `schedule/greenContextLifecycle.cu`。全量 CMake 仍受 `hotPotKernels/qy2Only`
+既有构建问题影响，因此本轮使用 `/usr/local/musa/bin/clang++` 对两个用例做直接编译链接验证。
 
 验证结果：
 
-- MUSA / S5000：`greenContextIsolation_check` 与 `greenContextLifecycle_check` 均直接编译、链接、注册和运行通过。
-- MUSA latency：`smem(KiB)=188`、`blk/SM=1`，`primaryFullContention *Iso≈0.21`，`greenPartitioned *Iso≈1.00`。
-- MUSA lifecycle：`criticalSM=8/16` 均输出独立 lifecycle schema，create pair 约 `7.9–8.2 ms`。
-- CUDA / RTX 3060：通过 musify 生成 CUDA 源码后，`greenContextIsolation_cuda_check` 与 `greenContextLifecycle_cuda_check` 均编译、链接、注册和运行通过。
-- CUDA latency：`smem(KiB)=47`、`blk/SM=1`，`primaryFullContention *Iso≈0.20`，`greenPartitioned *Iso≈1.00`。
-- CUDA lifecycle：`criticalSM=8/16` 均输出独立 lifecycle schema，create pair 约 `1.9–2.2 ms`。
+- 两个用例均可直接编译链接；链接旧版 `build/common/libbenchmark_common.a` 时需要 `-no-pie`。
+- `greenContextIsolation_check_new -l` 只注册 `greenContextLatency`。
+- `greenContextLifecycle_check_new -l` 只注册 `greenContextLifecycle`。
+- MUSA / S5000 latency：`smem(KiB)=188`、`blk/SM=1`；`greenPartitioned` 的 `crit(ms)` 约 `3.45 ms`，`*Iso≈1.00`；`primaryFullContention` 的 `crit(ms)` 约 `17.66–17.67 ms`，`*Iso≈0.20–0.21`。
+- `primaryBulkOnly` 是普通 stream 调度对照项，本轮 `criticalSM=8` 与 `criticalSM=16` 出现不同调度表现，不建议作为准入阈值；看护应以 `greenPartitioned` 的 `*Iso` 和 `crit(ms)` 稳定性为主。
+- MUSA / S5000 lifecycle：`criticalSM=8` 的 `create(us)` 为 `mean=15876.64`、`min=8154.02`、`max=18449.90`；`criticalSM=16` 的 `create(us)` 为 `mean=11670.40`、`min=8364.94`、`max=18457.09`。
 
-CUDA 验证注意事项：当前 CUDA 远程仓库没有预置 `build/common/libbenchmark_common.a`，本轮在 `/tmp/green_common_cuda_check` 临时编译 common 静态库完成直连验证；另外 CUDA 侧需要使用 musify 后的 helper 头参与编译验证，MUSA 源码本身不保留手写 CUDA/MUSA 条件映射。
-
-### 8.5 create 成本差异分析
-
-从重构后结果看，MUSA 与 CUDA 的 lifecycle pair 成本量级仍存在明显差异：
-
-| 后端 | create pair 量级 |
-|---|---:|
-| CUDA / RTX 3060 | 约 2 ms |
-| MUSA / S5000 | 约 8 ms |
-
-`create(us)` 仍是完整 critical+bulk Green Context lifecycle pair 成本，包含 resource desc、Green Context create、context 转换、stream create、warmup launch/sync、destroy 等多个步骤，不能直接归因到某一个 API。
-
-如果后续要定位成本来源，建议将 lifecycle 计时拆成分项：`T_desc`、`T_green_ctx_create`、`T_ctx_from_green_ctx`、`T_ctx_set_current`、`T_stream_create`、`T_get_resource`、`T_warmup_launch_sync`、`T_stream_destroy`、`T_green_ctx_destroy`，并输出 p50、p90、max。
+结论：latency/isolation 看护路径成立；lifecycle 的低位仍约 8 ms，但存在 18 ms 级长尾，
+正式看护不宜只看 mean，建议同时保留 p50、p90、max 或至少 min/mean/max。
 
 ## 9. 当前构建限制
 

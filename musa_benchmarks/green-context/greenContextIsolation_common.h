@@ -62,7 +62,11 @@ __global__ void sm_occupancy_spin_kernel(unsigned long long spinCycles,
     __syncthreads();
 
     if (threadIdx.x == 0 && startedFlags != nullptr) {
+        // Callers use this path only for pre-timed delay kernels; critical
+        // kernels pass nullptr so flag visibility is not part of their latency.
+        __threadfence_system();
         startedFlags[blockIdx.x] = smemTag ? marker : marker;
+        __threadfence_system();
     }
 
     const unsigned long long start = clock64();
