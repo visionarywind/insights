@@ -1,77 +1,66 @@
-# MUSA API Profiler
+# MUSA Kernel Profiler
 
-Zero-code-change profiler for MUSA GPU driver and runtime APIs.
-Injects via `MUSA_INJECTION64_PATH` into ANY process using MUSA — no recompilation needed.
+基于 MUPTI Driver Hooks 的 GPU kernel 耗时分析工具。
 
-## Architecture
+## 架构
 
 ```
-┌─────────────────────────────────────────────┐
-│  Application (sglang / torch / custom C)    │
-├─────────────────────────────────────────────┤
-│  MUSA Runtime API (musaXXX)   ← ToolsCallback RUNTIME_API domain │
-├─────────────────────────────────────────────┤
-│  MUSA Driver API (muXXX)      ← ToolsCallback DRIVER_API domain  │
-├─────────────────────────────────────────────┤
-│  KMD (kernel driver)                        │
-└─────────────────────────────────────────────┘
+用户程序 (musaLaunchKernel)
+    │
+    ▼
+libmusa_driver.so ── MUPTI tracepoints ──→ libmusaKernelProfiler.so (本库)
+    │                                              │
+    │ RegisterKernelV2(DispatchCommand)             │ 创建 KernelRecord
+    │ MarkCommandBeginEnd(Context, Command)          │ 读 GPU 时间戳 + 输出报告
+    │
+    ▼
+    输出: stdout (每个 kernel 一行)
 ```
 
-## Quick Start
+## 构建
 
 ```bash
-# Build
-make profiler
-
-# Test (inside container with MUSA driver)
-make test1    # Driver API (mu*) profiling
-make test2    # Runtime API (musa*) profiling
-make test3    # Overlay (cross-layer) statistics
-make test4    # sglang integration
+cd doc/profiler
+make
+# 生成 libmusaKernelProfiler.so
 ```
 
-## Usage
+## 使用
 
 ```bash
-# Inject into any MUSA process
-export MUSA_INJECTION64_PATH=/path/to/liblatency_profiler.so
+# 设置注入路径
+export MUSA_INJECTION64_PATH=/path/to/doc/profiler/libmusaKernelProfiler.so
 
-# Optional: configure output
-export PROFILER_OUTPUT=/tmp/report.txt    # write report to file (default: stderr)
-export PROFILER_TOP_N=30                 # limit report rows (default: 60)
-export PROFILER_DEBUG=1                  # enable debug logging
-export PROFILER_DRIVER=1                 # enable driver API capture (default: 1)
-export PROFILER_RUNTIME=1                # enable runtime API capture (default: 1)
-export PROFILER_USE_MUPTI=0             # disable public MUPTI path (default: 0)
+# 运行你的 MUSA 应用
+./your_musa_app
 
-# Run your application
-python -m sglang.bench_one_batch --model-path ... --batch 1 ...
+# 输出示例:
+# [PROFILER] 2026-05-19 14:32:01.123 | vectorAdd                          | Grid(128,1,1) Block(256,1,1) DynamicSmem:0
+# [PROFILER]   CPU调度:    12.34 us | GPU队列:     5.67 us | GPU执行:   123.45 us | 端到端:   141.46 us
 ```
 
-## Report Format
+## Hook 回调与线程模型
+
+| Hook | 调用线程 | 触发时机 |
+|------|----------|----------|
+| `OnRegisterKernelV2` | Submit 线程 | DispatchCommand 构造函数 |
+| `OnMarkCommandBeginEnd` | Wait 线程 | GPU 完成后 ReleaseResources() |
+| `OnMarkKernelQueued` | Enqueue 线程 | (旧平台) 命令入队 |
+| `OnMarkKernelSubmitted` | Submit 线程 | (旧平台) 命令提交到 GPU |
+
+## 数据流
 
 ```
-driver:muXXX            ← Driver API calls (mu* prefix)
-runtime:musaXXX         ← Runtime API calls (musa* prefix)
-```
+RegisterKernelV2
+  → 读取: kernel 名称, grid/block, correlationId
+  → 创建 KernelRecord → 存入 g_Records[correlationId]
+  → 返回 record 指针 (作为 MUpti::Context)
 
-Report columns: Name, Count, Total(us), Self(us), Min(us), Max(us).
+  ... kernel 在 GPU 上执行 ...
 
-Wrapper APIs (Self < 10% of Total) are automatically marked — their time is mostly in child calls.
-
-## File Layout
-
-```
-profiler/
-├── api_latency_profiler.cpp    # Main profiler source (v6)
-├── cbid_names_driver.inc        # Driver CBID → name table (811 entries)
-├── cbid_names_runtime.inc       # Runtime CBID → name table (519 entries)
-├── gen_cbid_names.py            # CBID name table generator
-├── Makefile                     # Build & test targets
-├── README.md
-└── tests/
-    ├── test_driver_api.c        # Test 1: mu* profiling
-    ├── test_runtime_api.c       # Test 2: musa* profiling
-    ├── test_overlay.c           # Test 3: cross-layer overlay
-    └── test_sglang.sh           # Test 4: sglang integration
+MarkCommandBeginEnd
+  → 取回 record (从 MUpti::Context* cast)
+  → 读取: queued_time, submit_time, gpu_begin, gpu_end
+  → 计算: CPU调度时间, GPU队列等待, GPU执行时间, 端到端延迟
+  → 输出报告 → 删除 record
 ```
