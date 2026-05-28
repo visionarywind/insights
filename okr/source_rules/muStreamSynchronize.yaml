@@ -1,0 +1,36 @@
+api: muStreamSynchronize
+phase: M1
+runtime_api: musaStreamSynchronize
+entry:
+  runtime: MUSA-Runtime/src/musa_stream.cpp
+  driver: linux-ddk/musa/src/driver/mu_stream.cpp
+core_path:
+  - linux-ddk/musa/src/driver/mu_stream.cpp: muapiStreamSynchronize
+  - linux-ddk/musa/src/musa/core/stream.cpp: Stream::WaitFinish
+  - linux-ddk/musa/src/musa/core/command: Command::Wait/semaphore wait
+state_variables:
+  - stream_id
+  - last_command_id
+  - waited_activity_id
+  - wait_reason
+  - engine_error
+model_events:
+  - RUNTIME_API_SPAN
+  - DRIVER_API_SPAN
+  - STREAM_WAIT_FINISH_SPAN
+  - COMMAND_WAIT_SPAN
+  - SYNC_WAIT_REASON
+  - API_SYNC_RELATION
+cost_terms:
+  - runtime_us
+  - driver_us
+  - stream_lookup_us
+  - last_command_lookup_us
+  - sync_wait_us
+  - engine_error_query_us
+  - pool_update_us
+  - unknown_us
+validation:
+  benchmark: launch kernel -> musaStreamSynchronize
+  sync_relation: waited command/activity
+  unknown_ratio: "<=0.15"

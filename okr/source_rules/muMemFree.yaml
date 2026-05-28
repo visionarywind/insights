@@ -1,0 +1,32 @@
+api: muMemFree
+phase: M1
+runtime_api: musaFree
+entry:
+  runtime: MUSA-Runtime/src/musa_memory.cpp
+  driver: linux-ddk/musa/src/driver/mu_memory.cpp
+core_path:
+  - linux-ddk/musa/src/driver/mu_memory.cpp: muapiMemFree
+  - linux-ddk/musa/src/musa/core/memoryPool.cpp: pool free/merge/update
+state_variables:
+  - context_id
+  - ptr
+  - size
+  - pool_id
+  - merge
+model_events:
+  - RUNTIME_API_SPAN
+  - DRIVER_API_SPAN
+  - MEM_POOL_FREE_SPAN
+  - API_MEMORY_RELATION
+cost_terms:
+  - runtime_us
+  - driver_us
+  - memory_lookup_us
+  - pool_free_us
+  - free_merge_us
+  - pool_update_us
+  - unknown_us
+validation:
+  benchmark: repeated musaMalloc/musaFree with pool reuse
+  allocation_relation: ptr/size/pool_id
+  unknown_ratio: "<=0.15"

@@ -1,0 +1,37 @@
+api: muMemAlloc
+phase: M1
+runtime_api: musaMalloc
+entry:
+  runtime: MUSA-Runtime/src/musa_memory.cpp
+  driver: linux-ddk/musa/src/driver/mu_memory.cpp
+core_path:
+  - linux-ddk/musa/src/driver/mu_memory.cpp: muapiMemAlloc
+  - linux-ddk/musa/src/musa/core/memoryPool.cpp: pool lookup/alloc/grow
+  - linux-ddk/musa/src/hal: HAL memory allocate/map
+state_variables:
+  - context_id
+  - device_id
+  - ptr
+  - size
+  - pool_id
+  - pool_hit
+  - grow_size
+model_events:
+  - RUNTIME_API_SPAN
+  - DRIVER_API_SPAN
+  - MEM_POOL_ALLOC_SPAN
+  - MEM_POOL_GROW_SPAN
+  - API_MEMORY_RELATION
+cost_terms:
+  - runtime_us
+  - driver_us
+  - context_lookup_us
+  - pool_lookup_us
+  - pool_lock_us
+  - pool_hit_or_grow_us
+  - hal_alloc_or_map_us
+  - unknown_us
+validation:
+  benchmark: musaMalloc fixed sizes + repeated allocation/free
+  allocation_relation: ptr/size/pool_id
+  unknown_ratio: "<=0.15"
