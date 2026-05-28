@@ -705,7 +705,97 @@ profile:
 | trace overhead | 新增 `traceOffOnOverhead` | baseline、trace off、trace on level 1/2 的开销 |
 | event signature | 新增 `modelEventSignature` | 断言关键事件序列完整 |
 
+### 9.7 Roofline 与 Occupancy 辅助分析（补充缺口）
+
+**动机**：当前方案聚焦 Runtime→Driver→KMD 软件栈，对 kernel 层只做 profiler 时间校准（KR2 §10）。缺少两个关键分析维度：(1) kernel 的计算/访存天花板分析，解释"为什么这个 kernel 是这个耗时"；(2) occupancy 分析，解释寄存器/shared memory 对 warp 并发度的限制。
+
+**目标**：为每个 kernel 输出 `roofline_category`（compute-bound / memory-bound / balanced）和 `occupancy_breakdown`（active blocks/SM、limiting factor），作为 KR2 Top50 kernel 排序的辅助解释维度，不要求 cycle-accurate。
+
+#### 9.7.1 峰值天花板计算
+
+利用已有基础设施，无需新增 profiling：
+
+| 天花板 | 数据来源 | 公式 |
+|--------|---------|------|
+| 峰值计算吞吐 | `musaDeviceProp.clockRate` (kHz) × `MUPTI_METRIC_PROPERTY_FLOP_SP_PER_CYCLE` | `peak_TFLOPS = clockRate × SMs × FLOPs_per_cycle / 1e6` |
+| 峰值带宽 | `musaDeviceProp.memoryClockRate` (kHz) × `musaDeviceProp.memoryBusWidth` (bits) | `peak_GBs = memoryClockRate × 1000 × (memoryBusWidth / 8) × 2 / 1e9` |
+
+`FLOP_SP_PER_CYCLE` 可从 `mupti_metrics.h` 的 `MUPTI_MetricProperty` 枚举查询（`MUPTI_METRIC_PROPERTY_FLOP_SP_PER_CYCLE`），也可用设备型号查表替代。
+
+#### 9.7.2 算术强度计算
+
+每 kernel 的算术强度 = `total_FLOPs / total_bytes_transferred`，数据来源：
+
+| 数据 | 来源 | 说明 |
+|------|------|------|
+| `total_FLOPs` | msight-compute 指标规则 YAML（`mt_rules/`）或 MUPTI Profiling API | 通过 `mupti_profiler_target.h` 采集 kernel 级指令计数 |
+| `total_bytes` | 同上，DRAM read/write throughput 指标 | 注意：仅 DRAM，不含 L1/L2 hit |
+
+若 msight-compute 指标规则不可用，降级方案：从 ELF 解析指令序列，按 opcode 分类计数（PSC `pscopcodes.h` 的 `PSCOP_MAD`/`PSCOP_FMA` 为 FLOP，`PSCOP_LD`/`PSCOP_ST`/`PSCOP_DMA` 为访存），乘以网格规模估算。
+
+#### 9.7.3 Occupancy 分解
+
+利用 `musa_occupancy.h` 的 standalone 计算器（不需要 GPU）：
+
+```text
+输入：musaOccDeviceProp（从 musaDeviceProp 构造）
+      musaOccFuncAttributes（从 musaFuncGetAttributes 或 MusaMeta ELF 解析构造）
+      blockSize
+      dynamicSmemSize
+
+输出：musaOccResult
+  - activeBlocksPerMultiprocessor
+  - limitingFactors（WARPS / REGISTERS / SHARED_MEMORY / BLOCKS）
+  - allocatedRegistersPerBlock, allocatedSharedMemPerBlock
+```
+
+`MusaMeta.h` 提供离线 ELF 解析：`KernMeta.attr_reg_count`、`temp_reg_count`、`slot_reg_count`、`shared_memory_size`、`max_block_size`，可直接构造 `musaOccFuncAttributes`，无需加载 kernel。
+
+#### 9.7.4 模型输出增强
+
+每个 kernel 的输出增加以下字段：
+
+```yaml
+kernel:
+  name: "fused_attention_kernel"
+  duration_us: 142.3
+  roofline_category: "compute_bound"     # 新增
+  arithmetic_intensity: 12.4             # 新增：FLOP/byte
+  peak_compute_pct: 78.5                 # 新增：实测/峰值 TFLOPS
+  peak_bandwidth_pct: 32.1               # 新增：实测/峰值 GB/s
+  occupancy:
+    active_blocks_per_sm: 4              # 新增
+    limiting_factor: "REGISTERS"         # 新增
+    theoretical_occupancy_pct: 50.0      # 新增
+    regs_per_thread: 64                  # 新增
+    smem_per_block_kb: 32                # 新增
+```
+
+#### 9.7.5 可复用基础设施清单
+
+| 能力 | 位置 | 状态 |
+|------|------|------|
+| 离线 occupancy 计算 | `MUSA-Runtime/include/musa_occupancy.h` | ✅ standalone header |
+| Kernel 资源元数据 | `linux-ddk/.../musameta/MusaMeta.h` | ✅ ELF 解析 |
+| 设备属性查询 | `musa_runtime_api.h` `musaDeviceProp` | ✅ Runtime API |
+| 峰值 FLOP 属性 | `MUPTI/include/mupti_metrics.h` | ✅ MetricProperty |
+| PSC 指令 opcode 定义 | `linux-ddk/.../psc/inc/pscopcodes.h` | ✅ 30+ opcodes |
+| PSC 反汇编器 | `linux-ddk/.../psc/src/decode/sudi/disasm.cpp` | ✅ |
+| msight-compute 指标规则 | 远程 `msight-compute/module/mt_rules/` | ⚠️ 需拉取 |
+| DRAM 读写指标 | 同上 | ⚠️ 需确认指标名称 |
+| 指令周期延迟表 | **不存在** | ❌ 需微基准测量或内部文档 |
+
+#### 9.7.6 实施优先级
+
+| 阶段 | 内容 | 依赖 |
+|------|------|------|
+| 阶段二（随 OKR 主线） | 峰值天花板计算 + occupancy 分解 | `musa_occupancy.h` + `MusaMeta.h`（已就绪） |
+| 阶段二（随 OKR 主线） | 算术强度计算（msight-compute 指标） | msight-compute 指标规则拉取 |
+| 阶段三（工程化） | PSC 指令级成本模型（替代 profiler 依赖） | 微基准或内部文档提供 cycle latency |
+
 建议新增输出：
+
+
 
 ```text
 benchmark_results.csv
@@ -750,6 +840,85 @@ benchmark_calibration_report.md
 5. 用模型预测 kernel 启动顺序、host submit 延迟和 stream gap。
 6. 比较 Top50 kernel 累计耗时排序的 Top-K overlap。
 7. 输出误差归因：relation 缺失、kernel name 归并错误、stream 顺序错误、submit 延迟错误、device duration 误差。
+
+#### 补充：设备侧 kernel 排序模型（补充缺口）
+
+**动机**：当前 KR2 的 kernel 排序完全依赖 profiler 实测 `kernel duration`（步骤 4："用 profiler kernel 时间校准 kernel duration"）。这提供了高精度但存在两个局限：(1) 必须运行 profiler，无法在离线/无 GPU 场景做预测；(2) 无法解释两个 kernel 耗时差异的根源（是寄存器压力、共享内存限制、还是计算密度差异）。
+
+**目标**：增加一层轻量 kernel 成本预测模型，不要求 cycle-accurate，只要求 kernel 间相对排序与 profiling 对齐（Top-K overlap 90%+）。profiler 数据仍为主校准源，预测模型用于辅助排序验证和差异归因。
+
+**方法**：指令分类 × 资源缩放模型
+
+```text
+kernel_cost_predicted =
+    (Σ opcode_weight[i] × instruction_count[i])  # 指令级基础成本
+    × occupancy_scale(regs, smem, block_size)     # 资源并发度缩放
+    / num_sms                                       # SM 级并行
+```
+
+**指令分类**（基于 PSC opcodes，来源 `pscopcodes.h`）：
+
+| 类别 | 包含 opcode | 权重来源 |
+|------|------------|---------|
+| 计算密集型 | `PSCOP_MAD`, `PSCOP_FMA`, `PSCOP_ADD`, `PSCOP_MUL`, `PSCOP_DP` 等 | 微基准校准或固定权重（如 MAD=4, ADD=2） |
+| 访存密集型 | `PSCOP_LD`, `PSCOP_ST`, `PSCOP_DMA` | 微基准校准（含 DRAM/L1/L2 分层权重） |
+| 控制流 | `PSCOP_BRANCH`, `PSCOP_BARRIER` | 固定开销权重 |
+| 特殊功能 | `PSCOP_SFU`, `PSCOP_TEX` | 微基准校准 |
+
+**资源缩放因子**（利用 `musa_occupancy.h` standalone 计算器）：
+
+```text
+occupancy_scale = 1.0 / occupancy_pct
+其中 occupancy_pct = active_blocks_per_sm / max_blocks_per_sm
+```
+
+解释：occupancy 低 → 更多 blocks 串行执行 → 单 block 成本被放大。
+
+**指令计数获取路径**：
+
+| 路径 | 精度 | 适用场景 |
+|------|------|---------|
+| **路径 A**：msight-compute 采集指令计数（`inst_executed` 等 MUPTI 指标） | 高 | 在线 profiling |
+| **路径 B**：PSC 反汇编器解析 ELF → 按 opcode 分类计数 | 中 | 离线预测，无 GPU |
+| **路径 C**：从 kernel 元数据估算（regs × smem × block_size 查表） | 低 | 快速初筛 |
+
+**模型校准**：
+
+```text
+calibration_target:
+  对 3 个模型的 Top50 kernel：
+    - 路径 A：采集实际指令计数，拟合 opcode_weight[] 使预测误差最小
+    - 路径 B：反汇编指令计数，同上拟合
+    - 验证：Top-K overlap 90%+ 且 MAE < 15%
+```
+
+**可复用基础设施**：
+
+| 能力 | 位置 | 状态 |
+|------|------|------|
+| PSC opcode 定义 | `linux-ddk/.../pscopcodes.h` | ✅ 30+ opcodes |
+| PSC 反汇编器 | `linux-ddk/.../disasm.cpp` | ✅ |
+| ELF 解析 (regs/smem) | `linux-ddk/.../MusaMeta.h` | ✅ |
+| occupancy 计算 | `MUSA-Runtime/include/musa_occupancy.h` | ✅ standalone |
+| MUPTI 指令计数指标 | msight-compute `mt_rules/` | ⚠️ 需拉取确认指标名 |
+| opcode 延迟表 | **不存在** | ❌ 需微基准测量 |
+
+**与 profiler 校准的关系**：
+
+```text
+            profiler kernel duration（主校准源，高精度）
+                          │
+            ┌─────────────┼─────────────┐
+            ▼             ▼             ▼
+     kernel 排序验证   差异归因      离线预测
+    (Top-K overlap)  (为什么A比B慢)  (无GPU场景)
+                          │
+            ┌─────────────┘
+            ▼
+     指令分类 × 资源缩放模型（辅助，中等精度）
+```
+
+profiler 实测数据始终是主校准源。预测模型提供补充解释和离线能力，不替代 profiler。
 
 交付：
 
@@ -953,7 +1122,114 @@ CTS 能复现关键软件行为。
 版本差异能定位到具体模块和事件。
 ```
 
-## 13. 风险与处理
+## 13. 回归门禁与自动化验收（补充缺口）
+
+**动机**：当前方案对跨版本稳定性、插桩开销上限、kernel 排序精度等关键指标缺乏量化定义。`musa_samples/benchmarks/pytest/` 有基于 `benchmark_cfg.csv` 的阈值门禁（`result < baseline × factor → FAIL`），`musa_benchmarks/` 有基于 `calculateScoreOfSuit.py` 的相对评分体系，但两者均未与 OKR 性能建模的验收标准对齐。
+
+**目标**：定义明确的量化回归门禁指标，覆盖模型精度、插桩开销、事件质量三个维度，并与现有 CI 基础设施集成。
+
+### 13.1 回归门禁指标体系
+
+| 门禁项 | 阈值 | 测量方法 | 阻断级别 |
+|--------|------|---------|---------|
+| **Top90 API 建模误差 (MAE)** | < 5% | 对 Top90 Driver API 的 `predicted_self_time` vs `profiled_self_time` 计算 MAE | **阻断** |
+| **Top50 kernel 排序 overlap** | > 90% | 按累计耗时排序，Top-K overlap（K=10, 20, 50 三个点） | **阻断** |
+| **API→kernel 关系召回率** | ≥ 95% | `matched_relations / total_api_calls` | **阻断** |
+| **插桩开销 (trace on level 1)** | < 1% 端到端时间 | `(trace_on_wall_time - trace_off_wall_time) / trace_off_wall_time` | **阻断** |
+| **插桩开销 (trace on level 2)** | < 3% 端到端时间 | 同上 | **警告** |
+| **事件丢失率** | < 0.1% | `drop_count / emit_count` | **阻断** |
+| **Buffer overflow 次数** | = 0 | collector buffer flush 错误计数 | **阻断** |
+| **事件签名完整性** | 100% 关键事件序列出现 | 每个 API 的 `expected_event_signature` vs 实际采集 | **阻断** |
+| **Roofline category 一致性** | 分类一致率 > 95% | 模型预测 `roofline_category` vs 基于 profiler 实测 FLOP/带宽计算的类别 | **警告** |
+| **Occupancy 预测误差** | < 10% | 模型预测 `active_blocks_per_sm` vs 实际 occupancy（可通过 profiler 反推） | **信息** |
+
+### 13.2 跨版本回归门禁
+
+| 门禁项 | 阈值 | 说明 |
+|--------|------|------|
+| SDK minor 版本（1.x→1.y） | 上述所有阻断门禁仍满足 | 不重训模型，直接验证 |
+| SDK major 版本（1.x→2.0） | 上述所有阻断门禁仍满足 | 完整重建模型后验证 |
+| 源码规则变更 | 变更的 API 需重新验收事件签名 | source rule 绑定 commit hash |
+
+### 13.3 CI 集成方案
+
+利用现有 CI 基础设施：
+
+| 阶段 | 现有基础设施 | 新增内容 |
+|------|------------|---------|
+| 构建 | `MUPTI/.ciConfig.yaml` (x86_64/aarch64 Release/Debug) | 新增 `build.perf_model` job：编译 collector + 模型代码 |
+| 单元测试 | `MUSA-Runtime/unittest/` CTest | 新增 `perf_model` 测试目录：事件 schema 验证、cost 项单元测试 |
+| 微基准 | `musa_benchmarks/scripts/autorun.py` | 新增 `calibration` suite：launch/memory/sync 成本微基准自动运行 |
+| 回归门禁 | `musa_samples/benchmarks/pytest/` 阈值比较 | 新增 `perf_model_gate.py`：读取模型输出 parquet，逐项检查 §13.1 门禁 |
+| 评分 | `musa_benchmarks/scripts/calculateScoreOfSuit.py` | 新增 `model_score` 维度：基于 MAE 的对数评分（MAE=1%→score=2.0, MAE=5%→score≈1.3, MAE=10%→score=1.0） |
+| 报告 | Allure + InfluxDB + CSV | 新增 `gate_report.md`：逐项 PASS/WARN/FAIL + 趋势图（InfluxDB 时间序列） |
+
+**CI pipeline 流程**：
+
+```text
+commit push
+  → 构建（MUSA-Runtime + MUPTI + musa_benchmarks）
+  → 部署到测试节点（SSH remote_test.sh 模式）
+  → 运行 3 个模型 workload（trace on level 1）
+  → collector 采集 + 模型重建
+  → perf_model_gate.py 检查 §13.1 门禁
+  → musa_benchmarks calibration suite 验证成本项
+  → 生成 gate_report.md
+  → 任一阻断门禁 FAIL → pipeline 阻断
+```
+
+### 13.4 评分映射（兼容现有 musa_benchmarks 对数评分）
+
+```text
+model_score = baseScore × Σ(caseWeight × score_ratio) / totalWeight
+
+其中 score_ratio = 1 + log10(threshold / actual_error)
+  - MAE = 1% → score_ratio ≈ 1.70
+  - MAE = 5%（阈值）→ score_ratio = 1.00（基线）
+  - MAE = 10% → score_ratio ≈ 0.70
+  - MAE = 50% → score_ratio = 0.00
+
+model_score 可与现有 musa_benchmarks 的 memoryOp/mulStreams 等 suite 评分
+合并为总评，用于跨 SDK 版本对比。
+```
+
+### 13.5 门禁配置文件
+
+新增 `musa_benchmarks/TestSuitConfig.json` 扩展：
+
+```json
+{
+  "suites": {
+    "perfModel": {
+      "baseline": "profiler_ground_truth",
+      "baseScore": 1000,
+      "gates": {
+        "api_mae_pct": { "max": 5.0, "level": "block" },
+        "kernel_top50_overlap_pct": { "min": 90.0, "level": "block" },
+        "relation_recall_pct": { "min": 95.0, "level": "block" },
+        "trace_overhead_level1_pct": { "max": 1.0, "level": "block" },
+        "trace_overhead_level2_pct": { "max": 3.0, "level": "warn" },
+        "event_drop_rate_pct": { "max": 0.1, "level": "block" },
+        "buffer_overflow_count": { "max": 0, "level": "block" },
+        "event_signature_completeness_pct": { "min": 100.0, "level": "block" },
+        "roofline_category_consistency_pct": { "min": 95.0, "level": "warn" },
+        "occupancy_error_pct": { "max": 10.0, "level": "info" }
+      }
+    }
+  }
+}
+```
+
+### 13.6 与现有回归基础设施的关系
+
+| 现有系统 | 定位 | 与 OKR 门禁的关系 |
+|---------|------|------------------|
+| `musa_samples/benchmarks/pytest/` | 内存带宽 + kernel 延迟微基准回归 | **不替代**：专注于底层 Driver 性能，OKR 门禁专注于模型精度 |
+| `musa_benchmarks/` Celero 评分 | 跨平台（CUDA/MUSA/ROCm）Driver 性能对比 | **补充**：新增 `perfModel` suite 评分并入总评 |
+| `MUSA-Runtime/unittest/` CTest | Runtime API 正确性 | **不重叠**：OKR 门禁新增独立的模型精度测试 |
+| `MUPTI/.ciConfig.yaml` | MUPTI 构建 + CTS 冒烟 | **扩展**：新增 `perf_model` 构建 job |
+
+## 14. 风险与处理
 
 | 风险 | 影响 | 处理 |
 |---|---|---|
@@ -966,8 +1242,11 @@ CTS 能复现关键软件行为。
 | 源码规则维护成本高 | SDK 版本升级后模型失效 | source rule 绑定 commit，CI 检查埋点覆盖 |
 | `musa_benchmarks` 覆盖不足 | 成本校准和插桩开销无法闭环 | 新增 calibration、overhead、event signature 用例 |
 | Top50 kernel overlap 被误用 | 只证明 kernel 列表对齐，不证明软件模型正确 | 增加 relation recall、事件质量、成本分项误差 |
+| PSC 指令周期延迟表缺失 | 设备侧 kernel 成本模型精度不足 | 先用 msight-compute 指令计数 + 微基准校准；延迟表缺失时用固定权重降级方案 |
+| msight-compute 指标规则不可访问 | 算术强度和指令计数无法采集 | 降级方案：PSC 反汇编器解析 ELF 做 opcode 分类计数；或仅用 profiler kernel duration 做纯查表模型 |
+| 回归门禁首次集成失败率高 | CI pipeline 频繁阻断，影响开发效率 | 门禁分阶段上线：先 warning-only → 再 block；预留门禁跳过机制（需审批） |
 
-## 14. Definition of Done
+## 15. Definition of Done
 
 完成后应具备以下能力：
 
@@ -982,8 +1261,11 @@ CTS 能复现关键软件行为。
 9. `musa_benchmarks` 能完成成本校准、trace overhead 验收和 event signature 验收。
 10. CTS 能复现 memory、stream、graph、sync、command merge、KV cache、attention/MLP、expert routing 等关键行为。
 11. 未开启 collector 时，埋点仅保留 low overhead 分支，不改变正常执行行为。
+12. 每个 kernel 输出 `roofline_category`（compute-bound / memory-bound / balanced）和 `occupancy_breakdown`（active blocks/SM、limiting factor），用于解释 kernel 性能差异的根源。
+13. 设备侧 kernel 排序模型（指令分类 × 资源缩放）的 Top-K overlap 与 profiling 对齐 90%+，MAE < 15%。
+14. 回归门禁自动化：阻断门禁（MAE、overlap、召回率、插桩开销、事件丢失率）全部通过；跨 SDK 版本回归报告自动生成。
 
-## 15. 当前优先级
+## 16. 当前优先级
 
 优先做最小闭环：
 

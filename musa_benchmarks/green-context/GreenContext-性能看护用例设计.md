@@ -507,6 +507,7 @@ CUDA lifecycle 结果：
 - `primaryFullContention` 下 critical latency 明显增大，`*Iso≈0.20`。
 - `greenPartitioned` 下 critical latency 接近 solo latency，`*Iso≈1.00`。
 - lifecycle pair 成本约 `1.9–2.2 ms`，`criticalSM=8` 存在一次长尾。
+<<<<<<< HEAD
 
 ### 8.4 错误检查封装整改验证
 
@@ -541,61 +542,42 @@ CUDA 验证注意事项：当前 CUDA 远程仓库没有预置 `build/common/lib
 `create(us)` 仍是完整 critical+bulk Green Context lifecycle pair 成本，包含 resource desc、Green Context create、context 转换、stream create、warmup launch/sync、destroy 等多个步骤，不能直接归因到某一个 API。
 
 如果后续要定位成本来源，建议将 lifecycle 计时拆成分项：`T_desc`、`T_green_ctx_create`、`T_ctx_from_green_ctx`、`T_ctx_set_current`、`T_stream_create`、`T_get_resource`、`T_warmup_launch_sync`、`T_stream_destroy`、`T_green_ctx_destroy`，并输出 p50、p90、max。
+=======
+>>>>>>> ef2df34 (add doc)
 
-### 8.7 create 成本差异分析
+### 8.4 错误检查封装整改验证
 
-从当前结果看，`create(us)` 有两个层面的差异。
+本轮将 GreenContext 中自定义的 `CHECK_MUSA` / `CHECK_MU` 封装替换为仓库标准封装：
 
-第一，`criticalSM=8` 与 `criticalSM=16` 的均值差异主要受长尾影响，不能直接解释为
-SM 数量越少或越多导致 create 更慢。
+- Runtime API 统一使用 `checkMusaErrors(...)`。
+- Driver API 统一使用 `checkMuErrors(...)`。
+- `greenContextIsolation_common.h` 新增引用 `helper_musa.h` 与 `helper_musa_drvapi.h`。
+- 删除自定义 `check_musa_errors`、`check_mu_errors` 以及 `CHECK_MUSA` / `CHECK_MU` 宏。
+- 检查 `greenContextIsolation_common.h`、`greenContextIsolation.cu`、`greenContextLifecycle.cu` 后，未发现上述自定义封装残留。
 
-CUDA 同规格结果：
+验证结果：
 
-| criticalSM | create(us) Mean | create(us) Min | create(us) Max |
-|---:|---:|---:|---:|
-| 8 | 2276.77 | 1945.41 | 8219.20 |
-| 16 | 1957.23 | 1944.40 | 1968.37 |
+- MUSA / S5000：`greenContextIsolation_check` 与 `greenContextLifecycle_check` 均直接编译、链接、注册和运行通过。
+- MUSA latency：`smem(KiB)=188`、`blk/SM=1`，`primaryFullContention *Iso≈0.21`，`greenPartitioned *Iso≈1.00`。
+- MUSA lifecycle：`criticalSM=8/16` 均输出独立 lifecycle schema，create pair 约 `7.9–8.2 ms`。
+- CUDA / RTX 3060：通过 musify 生成 CUDA 源码后，`greenContextIsolation_cuda_check` 与 `greenContextLifecycle_cuda_check` 均编译、链接、注册和运行通过。
+- CUDA latency：`smem(KiB)=47`、`blk/SM=1`，`primaryFullContention *Iso≈0.20`，`greenPartitioned *Iso≈1.00`。
+- CUDA lifecycle：`criticalSM=8/16` 均输出独立 lifecycle schema，create pair 约 `1.9–2.2 ms`。
 
-`criticalSM=8` 的 min 与 `criticalSM=16` 接近，均在 1.9 ms 左右。`criticalSM=8`
-出现一次 8.2 ms 长尾，拉高了 mean。
+CUDA 验证注意事项：当前 CUDA 远程仓库没有预置 `build/common/libbenchmark_common.a`，本轮在 `/tmp/green_common_cuda_check` 临时编译 common 静态库完成直连验证；另外 CUDA 侧需要使用 musify 后的 helper 头参与编译验证，MUSA 源码本身不保留手写 CUDA/MUSA 条件映射。
 
-MUSA 同规格结果：
+### 8.5 create 成本差异分析
 
-| criticalSM | create(us) Mean | create(us) Min | create(us) Max |
-|---:|---:|---:|---:|
-| 8 | 8464.58 | 7891.31 | 15028.70 |
-| 16 | 8285.29 | 8253.60 | 8438.41 |
-
-`criticalSM=8` 同样存在一次 15 ms 级别长尾。只看 mean 容易误判，后续应同时输出
-p50、p90 和 max。
-
-第二，MUSA 与 CUDA 的平台差异更明显：
+从重构后结果看，MUSA 与 CUDA 的 lifecycle pair 成本量级仍存在明显差异：
 
 | 后端 | create pair 量级 |
 |---|---:|
 | CUDA / RTX 3060 | 约 2 ms |
 | MUSA / S5000 | 约 8 ms |
 
-该差异说明 MUSA 的 Green Context 生命周期路径整体开销更高，但当前指标还不能说明
-高在哪一层。原因是 `create(us)` 包含 resource desc、Green Context create、context
-转换、stream create、warmup launch/sync、destroy 等多个步骤。
+`create(us)` 仍是完整 critical+bulk Green Context lifecycle pair 成本，包含 resource desc、Green Context create、context 转换、stream create、warmup launch/sync、destroy 等多个步骤，不能直接归因到某一个 API。
 
-如果要定位差异来源，应将 lifecycle 计时拆成以下分项：
-
-| 分项 | 说明 |
-|---|---|
-| `T_desc` | `muDevResourceGenerateDesc` / `cuDevResourceGenerateDesc` |
-| `T_green_ctx_create` | `muGreenCtxCreate` / `cuGreenCtxCreate` |
-| `T_ctx_from_green_ctx` | `muCtxFromGreenCtx` / `cuCtxFromGreenCtx` |
-| `T_ctx_set_current` | `muCtxSetCurrent` / `cuCtxSetCurrent` |
-| `T_stream_create` | `muGreenCtxStreamCreate` / `cuGreenCtxStreamCreate` |
-| `T_get_resource` | `muGreenCtxGetDevResource` / `cuGreenCtxGetDevResource` |
-| `T_warmup_launch_sync` | `nop_kernel` launch 和 stream synchronize |
-| `T_stream_destroy` | `muStreamDestroy` / `cuStreamDestroy` |
-| `T_green_ctx_destroy` | `muGreenCtxDestroy` / `cuGreenCtxDestroy` |
-
-建议后续将 `createDestroyPair` 扩展为分项计时版本，输出 p50、p90、max，避免单次冷启动
-或偶发调度长尾影响判断。
+如果后续要定位成本来源，建议将 lifecycle 计时拆成分项：`T_desc`、`T_green_ctx_create`、`T_ctx_from_green_ctx`、`T_ctx_set_current`、`T_stream_create`、`T_get_resource`、`T_warmup_launch_sync`、`T_stream_destroy`、`T_green_ctx_destroy`，并输出 p50、p90、max。
 
 ## 9. 当前构建限制
 
