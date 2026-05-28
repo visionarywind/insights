@@ -1,34 +1,32 @@
 // ============================================================================
-// greenContextIsolation.cu — Green Context SM Isolation Benchmark
+// greenContextIsolation.cu — Green Context SM 隔离性基准测试
 // ============================================================================
 //
-// Measures whether Green Context partitions actually isolate critical
-// workloads from background interference at the SM level.
+// 测量 Green Context 分区是否真的在 SM 层面隔离了关键负载，使其不受
+// 后台干扰的影响。
 //
-// The benchmark compares three scenarios:
+// 本 benchmark 比较三种场景：
 //
-//   1. primaryFullContention (BASELINE):
-//      Both delay and critical kernels run in the primary context.
-//      Delay uses ALL SMs. This represents worst-case interference —
-//      the critical kernel has nowhere to run until delay blocks finish.
+//   1. primaryFullContention（BASELINE）：
+//      delay 和 critical kernel 均在 primary context 中运行。
+//      delay 使用全部 SM。这是最坏情况——critical kernel 无处可跑，
+//      只能等待 delay block 完成。
 //
-//   2. primaryBulkOnly:
-//      Both kernels in primary context, but delay uses only the same
-//      number of blocks as the bulk partition would. This isolates the
-//      effect of "less background work" from the effect of Green Context
-//      partitioning itself.
+//   2. primaryBulkOnly：
+//      两个 kernel 都在 primary context 中，但 delay 仅使用与 bulk 分区
+//      相同数量的 block。这用于将"后台工作量减少"的效果与 Green Context
+//      分区本身的效果区分开。
 //
-//   3. greenPartitioned (TARGET):
-//      Delay runs in the bulk Green Context, critical runs in the
-//      critical Green Context. If Green Context works correctly, the
-//      critical kernel's latency should be close to its solo latency
-//      regardless of what the bulk partition is doing.
+//   3. greenPartitioned（TARGET）：
+//      delay 在 bulk Green Context 中运行，critical 在 critical Green
+//      Context 中运行。如果 Green Context 工作正常，critical kernel 的
+//      延迟应接近其独立运行的延迟，与 bulk 分区在做什么无关。
 //
-// Metric: Isolation Score = solo_latency / contended_latency
-//   - ~1.0 → perfect isolation (critical workload unaffected by background)
-//   - << 1.0 → interference (background work delays critical kernel)
+// 指标：隔离分数 = solo_latency / contended_latency
+//   - ~1.0 → 完美隔离（关键负载不受后台干扰）
+//   - << 1.0 → 存在干扰（后台工作拖慢了关键 kernel）
 //
-// Experiment values: critical SM count = 8 or 16.
+// 实验参数：critical SM 数量 = 8 或 16。
 // ============================================================================
 
 #include "Celero.h"
@@ -38,20 +36,19 @@
 #include <memory>
 #include <vector>
 
-// Each sample runs the full measureContendedCritical flow (launch delay,
-// wait for all blocks, measure critical). 20 samples give statistically
-// meaningful mean/min/max. 1 iteration per sample avoids averaging
-// across different background load states.
+// 每个样本运行一次完整的 measureContendedCritical 流程（launch delay、
+// 等待所有 block 就位、测量 critical）。20 个样本可给出统计上有意义的
+// 均值/最小值/最大值。每次样本 1 次迭代，避免对不同后台负载状态取平均。
 static const int SamplesCount = 20;
 static const int IterationsCount = 1;
 
 // ============================================================================
-// Unsupported Build Fallback
+// 不支持的构建：回退桩
 // ============================================================================
 #ifdef GREEN_CONTEXT_UNSUPPORTED_BUILD
 
-// Generates a stub that reports Supported=0. See the macro definition
-// in greenContextIsolation_common.h for details.
+// 生成输出 Supported=0 的桩程序。参见 greenContextIsolation_common.h
+// 中的宏定义。
 DECLARE_GREEN_CONTEXT_UNSUPPORTED_MAIN(greenContextLatency)
 
 #else
@@ -60,62 +57,59 @@ DECLARE_GREEN_CONTEXT_UNSUPPORTED_MAIN(greenContextLatency)
 // GreenContextLatencyFixture
 // ============================================================================
 //
-// Test fixture for measuring critical kernel latency under various
-// contention scenarios. Inherits SM partition setup from the base class.
+// 用于在各种争用场景下测量 critical kernel 延迟的测试 fixture。
+// 继承自基类的 SM 分区设置。
 //
-// Lifecycle per experiment value (8 or 16 critical SMs):
-//   setUp()         — partition SMs, create Green Contexts, alloc flags
-//   onExperimentStart() → (inherited, no-op)
-//   [for each sample]:
-//     setUp() already done
-//     BASELINE_F / BENCHMARK_F body:
-//       measureSoloCritical()          → solo latency
-//       measureContendedCritical()     → latency under contention
-//       recordLatency(solo, contended) → push to metrics
-//   [end samples]
-//   onExperimentEnd() → (inherited, no-op)
-//   tearDown()        — destroy streams, free flags, destroy Green Contexts
+// 每个实验参数（8 或 16 个 critical SM）的生命周期：
+//   setUp()         — 划分 SM、创建 Green Context、分配 flag
+//   onExperimentStart() → （继承，空操作）
+//   [每个样本循环]：
+//     setUp() 已完成
+//     BASELINE_F / BENCHMARK_F 体：
+//       measureSoloCritical()          → 独立延迟
+//       measureContendedCritical()     → 争用下的延迟
+//       recordLatency(solo, contended) → 写入指标
+//   [样本结束]
+//   onExperimentEnd() → （继承，空操作）
+//   tearDown()        — 销毁 stream、释放 flag、销毁 Green Context
 class GreenContextLatencyFixture : public GreenContextSmPartitionFixture {
 public:
     // -------------------------------------------------------------------
-    // Experiment Values
+    // 实验参数
     // -------------------------------------------------------------------
-    // Tests with 8 and 16 critical SMs. The bulk partition gets the
-    // remaining SMs (total - critical - granularity overhead).
+    // 测试 8 和 16 个 critical SM。bulk 分区获得剩余 SM
+    //（总数 - critical - 粒度开销）。
     std::vector<TestFixture::ExperimentValue> getExperimentValues() const override {
         return {8, 16};
     }
 
     // -------------------------------------------------------------------
-    // setUp — One-time initialization per experiment value
+    // setUp — 每个实验参数的一次性初始化
     // -------------------------------------------------------------------
     void setUp(const TestFixture::ExperimentValue& experimentValue) override {
-        // Step 1: SM partition (from base class). printTooSmallError=true
-        // because isolation is the main benchmark — we want to know why
-        // it was skipped.
+        // 步骤 1：SM 分区（来自基类）。printTooSmallError=true，
+        // 因为隔离性是主 benchmark——我们希望知道被跳过原因。
         setUpSmPartition(experimentValue, /*printTooSmallError=*/true);
 
-        // Step 2: Validate the split produced usable partitions.
-        // This should never fail if setUpSmPartition succeeded, but
-        // defensive checks prevent confusing downstream errors.
+        // 步骤 2：验证划分产生了可用分区。
+        // 如果 setUpSmPartition 成功，这里应该不会失败，但防御性
+        // 检查可以避免令人困惑的下游错误。
         if (m_CriticalBlocks <= 0 || m_BulkBlocks <= 0) {
             std::cerr << "invalid Green Context SM split: critical="
                       << m_CriticalBlocks << ", bulk=" << m_BulkBlocks << std::endl;
             std::exit(EXIT_FAILURE);
         }
 
-        // Step 3: Configure the spin kernel to use our chosen shared
-        // memory size. Must be done before any kernel launch so that
-        // occupancy reflects the actual resource usage.
+        // 步骤 3：将自旋 kernel 配置为使用我们选择的 shared memory 大小。
+        // 必须在任何 kernel launch 之前完成，使 occupancy 反映实际资源使用量。
         set_dynamic_shared_limit(m_SharedBytes);
 
-        // Step 4: Ensure we are in the primary context before creating
-        // Green Contexts (muGreenCtxCreate may change current context).
+        // 步骤 4：确保在创建 Green Context 之前处于 primary context
+        //（muGreenCtxCreate 可能改变当前 context）。
         checkMuErrors(muCtxSetCurrent(m_PrimaryCtx));
 
-        // Step 5: Create Green Context partitions for the critical and
-        // bulk domains. Each creation includes a nop_kernel warmup to
-        // force lazy initialization.
+        // 步骤 5：为 critical 和 bulk 域创建 Green Context 分区。
+        // 每次创建包含一次 nop_kernel warmup，以强制完成延迟初始化。
         m_GreenCritical.create(m_Device, m_CriticalSm);
         m_GreenBulk.create(m_Device, m_BulkSm);
         if (m_GreenCritical.smCount != m_CriticalSm.sm.smCount ||
@@ -125,22 +119,21 @@ public:
             std::exit(EXIT_FAILURE);
         }
 
-        // Step 6: Create primary-context streams for the baseline cases
-        // (scenarios 1 and 2). Non-blocking streams allow the delay and
-        // critical kernels to run concurrently on different streams.
+        // 步骤 6：为基线场景（场景 1 和 2）创建 primary-context stream。
+        // 非阻塞 stream 允许 delay 和 critical kernel 在不同 stream 上
+        // 并发运行。
         checkMuErrors(muCtxSetCurrent(m_PrimaryCtx));
         checkMusaErrors(musaStreamCreateWithFlags(
             &m_PrimaryDelayStream, musaStreamNonBlocking));
         checkMusaErrors(musaStreamCreateWithFlags(
             &m_PrimaryCriticalStream, musaStreamNonBlocking));
 
-        // Step 7: Allocate mapped host memory for the started-flags
-        // synchronization mechanism. musaHostAllocMapped gives both CPU
-        // and GPU access to the same physical pages — the GPU writes
-        // flags, the CPU polls them.
+        // 步骤 7：分配 mapped host memory 用于 started-flags 同步机制。
+        // musaHostAllocMapped 让 CPU 和 GPU 都能访问同一物理页面——
+        // GPU 写入 flag，CPU 轮询。
         //
-        // One flag per SM (m_TotalSms) so every delay block can signal
-        // independently.
+        // 每个 SM 一个 flag（m_TotalSms），使每个 delay block 可以
+        // 独立发出信号。
         int* rawHostFlags = nullptr;
         checkMusaErrors(musaHostAlloc(
             &rawHostFlags, sizeof(int) * m_TotalSms, musaHostAllocMapped));
@@ -148,18 +141,18 @@ public:
         checkMusaErrors(musaHostGetDevicePointer(
             reinterpret_cast<void**>(&m_DeviceStartedFlags), rawHostFlags, 0));
 
-        // Step 8: Synchronize to ensure all setup work is complete.
+        // 步骤 8：同步，确保所有设置工作已完成。
         checkMusaErrors(musaDeviceSynchronize());
     }
 
     // -------------------------------------------------------------------
-    // tearDown — Cleanup in reverse order of setUp
+    // tearDown — 按 setUp 的逆序清理
     // -------------------------------------------------------------------
     void tearDown() override {
-        // Drain all pending work before destroying resources.
+        // 在销毁资源前排空所有待处理工作。
         checkMusaErrors(musaDeviceSynchronize());
 
-        // Destroy primary-context streams (baseline cases).
+        // 销毁 primary-context stream（基线场景）。
         if (m_PrimaryDelayStream != nullptr) {
             checkMusaErrors(musaStreamDestroy(m_PrimaryDelayStream));
             m_PrimaryDelayStream = nullptr;
@@ -169,33 +162,33 @@ public:
             m_PrimaryCriticalStream = nullptr;
         }
 
-        // Free mapped host memory (also invalidates m_DeviceStartedFlags).
+        // 释放 mapped host memory（同时使 m_DeviceStartedFlags 失效）。
         if (m_HostStartedFlags != nullptr) {
             checkMusaErrors(musaFreeHost(const_cast<int*>(m_HostStartedFlags)));
             m_HostStartedFlags = nullptr;
             m_DeviceStartedFlags = nullptr;
         }
 
-        // Destroy Green Context partitions (destroys internal streams too).
+        // 销毁 Green Context 分区（同时销毁内部 stream）。
         m_GreenCritical.destroy();
         m_GreenBulk.destroy();
 
-        // Release primary context (from base class).
+        // 释放 primary context（来自基类）。
         tearDownSmPartition();
     }
 
     // -------------------------------------------------------------------
-    // Metrics
+    // 指标
     // -------------------------------------------------------------------
-    // Reported columns in output CSV:
-    //   solo(ms)   — critical kernel latency with no background load
-    //   crit(ms)   — critical kernel latency under contention
-    //   *Iso       — isolation score = solo / crit (1.0 = perfect)
-    //   critSM     — number of SMs in critical partition
-    //   bulkSM     — number of SMs in bulk partition
-    //   block      — threads per block (from choose_launch_config)
-    //   smem(KiB)  — dynamic shared memory per block in KiB
-    //   blk/SM     — active blocks per SM (ideally 1)
+    // 输出 CSV 中的列：
+    //   solo(ms)   — 无后台负载时 critical kernel 的延迟
+    //   crit(ms)   — 争用下 critical kernel 的延迟
+    //   *Iso       — 隔离分数 = solo / crit（1.0 = 完美隔离）
+    //   critSM     — critical 分区中的 SM 数量
+    //   bulkSM     — bulk 分区中的 SM 数量
+    //   block      — 每 block 线程数（来自 choose_launch_config）
+    //   smem(KiB)  — 每 block 动态 shared memory（KiB）
+    //   blk/SM     — 每 SM 活跃 block 数（理想为 1）
     std::vector<std::shared_ptr<UserDefinedMeasurement>>
         getUserDefinedMeasurements() const override {
         return {m_SoloMs, m_CriticalMs, m_IsolationScore,
@@ -206,11 +199,10 @@ public:
     // -------------------------------------------------------------------
     // measureSoloCritical
     // -------------------------------------------------------------------
-    // Measures the critical kernel's execution time with NO background
-    // load. This is the baseline latency that the isolation score
-    // compares against.
+    // 测量 critical kernel 在无任何后台负载时的执行时间。
+    // 这是隔离分数进行比较的基线延迟。
     //
-    // Delegates to the shared measure_critical_kernel_latency helper.
+    // 委托给共享的 measure_critical_kernel_latency 辅助函数。
     float measureSoloCritical(MUstream stream, MUcontext ctx) {
         return measure_critical_kernel_latency(
             stream, ctx, m_CriticalBlocks, m_ThreadsPerBlock,
@@ -220,59 +212,58 @@ public:
     // -------------------------------------------------------------------
     // measureContendedCritical
     // -------------------------------------------------------------------
-    // Measures the critical kernel's execution time while a delay
-    // (background) kernel is already occupying SMs.
+    // 在 delay（后台）kernel 已占用 SM 的情况下测量 critical kernel 的
+    // 执行时间。
     //
-    // Protocol:
-    //   1. Clear the started-flags array (mapped host memory).
-    //   2. Launch the delay kernel on delayStream/delayCtx with
-    //      delayBlocks blocks. Each block writes 1 to its flag after
-    //      syncthreads, then enters the spin loop.
-    //   3. Poll started-flags until ALL delay blocks have started.
-    //      This ensures the delay kernel fully occupies its SMs.
-    //   4. Launch and time the critical kernel on criticalStream/criticalCtx.
-    //   5. Synchronize the delay stream (cleanup).
+    // 协议：
+    //   1. 清零 started-flags 数组（mapped host memory）。
+    //   2. 在 delayStream/delayCtx 上 launch delay kernel，使用
+    //      delayBlocks 个 block。每个 block 在 syncthreads 后写入 1
+    //      到其 flag，然后进入自旋循环。
+    //   3. 轮询 started-flags，直到所有 delay block 已启动。
+    //      这确保 delay kernel 完全占满了其 SM。
+    //   4. 在 criticalStream/criticalCtx 上 launch 并计时 critical kernel。
+    //   5. 同步 delay stream（清理）。
     //
-    // The critical kernel is launched WITHOUT waiting for the delay
-    // kernel to finish — this is the contention scenario we're measuring.
+    // critical kernel 在 launch 时不等待 delay kernel 完成——
+    // 这就是我们在测量的争用场景。
     //
-    // Parameters:
-    //   delayStream / delayCtx      — where the background load runs
-    //   delayBlocks                 — how many blocks of background load
-    //   criticalStream / criticalCtx — where the critical work runs
-    //   label                       — diagnostic label for error messages
+    // 参数：
+    //   delayStream / delayCtx      — 后台负载的运行位置
+    //   delayBlocks                 — 后台负载的 block 数量
+    //   criticalStream / criticalCtx — 关键工作的运行位置
+    //   label                       — 错误信息的诊断标签
     //
-    // Returns the critical kernel's GPU elapsed time in milliseconds.
+    // 返回 critical kernel 的 GPU 经过时间（毫秒）。
     float measureContendedCritical(MUstream delayStream, MUcontext delayCtx,
                                    int delayBlocks, MUstream criticalStream,
                                    MUcontext criticalCtx, const char* label) {
         musaStream_t delay = runtime_stream(delayStream);
 
-        // Reset flags before launch so we can detect when all blocks start.
+        // launch 前重置 flag，以便检测所有 block 何时启动。
         clear_started_flags(m_HostStartedFlags, delayBlocks);
 
-        // Launch the delay kernel. Each block: touch smem → syncthreads →
-        // write flag → spin for kDelaySpinCycles.
+        // Launch delay kernel。每个 block：触碰 smem → syncthreads →
+        // 写入 flag → 自旋 kDelaySpinCycles 周期。
         checkMuErrors(muCtxSetCurrent(delayCtx));
         sm_occupancy_spin_kernel<<<delayBlocks, m_ThreadsPerBlock,
                                    m_SharedBytes, delay>>>(
             kDelaySpinCycles, m_DeviceStartedFlags, 1, m_SharedBytes);
         check_kernel_launch(label);
 
-        // Busy-wait until all delay blocks have started their spin loop.
-        // Critical: if we don't wait, the critical kernel might run before
-        // the delay kernel occupies all its SMs, giving a falsely
-        // optimistic isolation score.
+        // 忙等，直到所有 delay block 已进入自旋循环。
+        // 关键：如果不等待，critical kernel 可能在 delay kernel
+        // 占满所有 SM 之前运行，导致虚假的乐观隔离分数。
         if (!wait_started_flags(m_HostStartedFlags, delayBlocks, label)) {
             std::exit(EXIT_FAILURE);
         }
 
-        // Now measure the critical kernel under contention.
+        // 现在测量争用下的 critical kernel。
         const float ms = measure_critical_kernel_latency(
             criticalStream, criticalCtx, m_CriticalBlocks,
             m_ThreadsPerBlock, m_SharedBytes, label);
 
-        // Cleanup: wait for delay kernel to finish before returning.
+        // 清理：在返回前等待 delay kernel 完成。
         checkMuErrors(muCtxSetCurrent(delayCtx));
         checkMusaErrors(musaStreamSynchronize(delay));
         return ms;
@@ -281,16 +272,16 @@ public:
     // -------------------------------------------------------------------
     // recordLatency
     // -------------------------------------------------------------------
-    // Pushes one sample's solo and contended latency into the metrics
-    // collectors. Also records the experiment configuration (SM counts,
-    // block size, etc.) for traceability in the output CSV.
+    // 将一个样本的独立和争用延迟写入指标收集器。
+    // 同时记录实验配置（SM 数量、block 大小等），以便在输出 CSV 中
+    // 追踪。
     void recordLatency(float soloMs, float criticalMs) {
         m_SoloMs->addValue(soloMs);
         m_CriticalMs->addValue(criticalMs);
-        // Isolation score = solo / contended.
-        //   = 1.0: background load had zero impact (perfect isolation)
-        //   < 1.0: background load slowed down the critical kernel
-        // Guard against division by zero (should never happen in practice).
+        // 隔离分数 = solo / contended。
+        //   = 1.0：后台负载零影响（完美隔离）
+        //   < 1.0：后台负载拖慢了 critical kernel
+        // 防止除零（实际中不应发生）。
         m_IsolationScore->addValue(
             criticalMs > 0.0f ? soloMs / criticalMs : 0.0f);
         m_CriticalSmCount->addValue(m_CriticalBlocks);
@@ -301,33 +292,32 @@ public:
     }
 
 protected:
-    // --- Primary-context resources (used by baseline cases 1 & 2) ---
+    // --- Primary-context 资源（基线场景 1 和 2 使用） ---
     musaStream_t m_PrimaryDelayStream = nullptr;
     musaStream_t m_PrimaryCriticalStream = nullptr;
 
-    // --- Synchronization flags (mapped host memory) ---
-    // m_HostStartedFlags: CPU-side pointer for polling.
-    // m_DeviceStartedFlags: GPU-side pointer passed to the delay kernel.
+    // --- 同步 flag（mapped host memory） ---
+    // m_HostStartedFlags：CPU 端指针，用于轮询。
+    // m_DeviceStartedFlags：GPU 端指针，传递给 delay kernel。
     volatile int* m_HostStartedFlags = nullptr;
     int* m_DeviceStartedFlags = nullptr;
 
-    // --- Green Context partitions ---
+    // --- Green Context 分区 ---
     GreenContextBundle m_GreenCritical{};
     GreenContextBundle m_GreenBulk{};
 
-    // --- Metrics collectors ---
-    // m_SoloMs: critical kernel latency without background load.
-    //   MEAN | MIN | MAX — want to see both average and worst case.
+    // --- 指标收集器 ---
+    // m_SoloMs：无后台负载时 critical kernel 的延迟。
+    //   MEAN | MIN | MAX — 需要同时观察平均值和最坏情况。
     std::shared_ptr<UDMGPUTime> m_SoloMs{
         new UDMGPUTime("solo(ms)", StatsView::MEAN | StatsView::MIN | StatsView::MAX)};
-    // m_CriticalMs: critical kernel latency under contention.
+    // m_CriticalMs：争用下 critical kernel 的延迟。
     std::shared_ptr<UDMGPUTime> m_CriticalMs{
         new UDMGPUTime("crit(ms)", StatsView::MEAN | StatsView::MIN | StatsView::MAX)};
-    // m_IsolationScore: solo / crit. * prefix = output as ratio.
+    // m_IsolationScore：solo / crit。* 前缀 = 以比率形式输出。
     std::shared_ptr<UDMRatio> m_IsolationScore{
         new UDMRatio("*Iso", StatsView::MEAN | StatsView::MIN | StatsView::MAX)};
-    // Experiment configuration (constant per experiment value, recorded
-    // for traceability in the output CSV).
+    // 实验配置（每个实验参数恒定，记录以在输出 CSV 中追踪）。
     std::shared_ptr<UDMCount> m_CriticalSmCount{new UDMCount("critSM")};
     std::shared_ptr<UDMCount> m_BulkSmCount{new UDMCount("bulkSM")};
     std::shared_ptr<UDMCount> m_BlockSize{new UDMCount("block")};
@@ -349,14 +339,13 @@ int main(int argc, char** argv) {
 }
 
 // ============================================================================
-// Scenario 1: BASELINE — Primary Context, Full Contention
+// 场景 1：BASELINE — Primary Context，完全争用
 // ============================================================================
-// Both delay and critical kernels run in the primary context on separate
-// non-blocking streams. Delay uses ALL SMs (m_FullBlocks).
+// delay 和 critical kernel 都在 primary context 中，在独立的非阻塞
+// stream 上运行。delay 使用全部 SM（m_FullBlocks）。
 //
-// Expected: worst isolation score. The delay kernel occupies every SM,
-// so the critical kernel cannot begin until some delay blocks finish.
-// This establishes the lower bound for isolation.
+// 预期：最差隔离分数。delay kernel 占满所有 SM，因此 critical kernel
+// 只有在某些 delay block 完成后才能开始。这确定了隔离的下限。
 BASELINE_F(greenContextLatency, primaryFullContention,
            GreenContextLatencyFixture, SamplesCount, IterationsCount) {
     const float soloMs = measureSoloCritical(
@@ -369,15 +358,14 @@ BASELINE_F(greenContextLatency, primaryFullContention,
 }
 
 // ============================================================================
-// Scenario 2: Primary Context, Bulk-Only Contention
+// 场景 2：Primary Context，仅 Bulk 争用
 // ============================================================================
-// Both kernels in primary context, but delay uses only m_BulkBlocks
-// (the same number of SMs the bulk Green Context would get).
+// 两个 kernel 都在 primary context 中，但 delay 仅使用 m_BulkBlocks
+//（与 bulk Green Context 会获得的 SM 数量相同）。
 //
-// Purpose: separates the effect of "fewer background SMs" from the
-// effect of "Green Context SM isolation". If the isolation score here
-// is already good, then Green Context is not the differentiator —
-// simply having fewer contending SMs is enough.
+// 目的：将"后台 SM 更少"的效果与"Green Context SM 隔离"的效果
+// 区分开。如果这里的隔离分数已经很好，那么 Green Context 并不是
+// 区分因素——仅靠减少争用 SM 数量就足够了。
 BENCHMARK_F(greenContextLatency, primaryBulkOnly,
             GreenContextLatencyFixture, SamplesCount, IterationsCount) {
     const float soloMs = measureSoloCritical(
@@ -390,18 +378,16 @@ BENCHMARK_F(greenContextLatency, primaryBulkOnly,
 }
 
 // ============================================================================
-// Scenario 3: Green Context Partitioned (Target Case)
+// 场景 3：Green Context 分区（目标场景）
 // ============================================================================
-// Delay runs in the bulk Green Context, critical runs in the critical
-// Green Context. Each Green Context has its own CUcontext and SM
-// partition.
+// delay 在 bulk Green Context 中运行，critical 在 critical Green
+// Context 中运行。每个 Green Context 有自己的 CUcontext 和 SM 分区。
 //
-// Expected: if Green Context works correctly, the critical kernel's
-// latency should be close to its solo latency regardless of the delay
-// kernel's activity. The isolation score should approach 1.0.
+// 预期：如果 Green Context 工作正常，critical kernel 的延迟应接近其
+// 独立运行延迟，与 delay kernel 的活动无关。隔离分数应接近 1.0。
 //
-// This is the key metric for the Green Context feature — it validates
-// that SM-level isolation actually prevents interference.
+// 这是 Green Context 特性的关键指标——它验证 SM 级别隔离是否真的
+// 阻止了干扰。
 BENCHMARK_F(greenContextLatency, greenPartitioned,
             GreenContextLatencyFixture, SamplesCount, IterationsCount) {
     const float soloMs = measureSoloCritical(
