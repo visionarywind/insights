@@ -412,9 +412,9 @@ static LaunchConfig choose_launch_config(MUdevice dev) {
 //
 // 用法：
 //   GreenContextBundle bundle;
-//   bundle.create(device, smResource);  // 创建 Green Context + stream + warmup
+//   bundle.initialize(device, smResource);  // 初始化 Green Context + stream + warmup
 //   // ... 在 bundle.ctx / bundle.stream 上发起工作 ...
-//   bundle.destroy();                   // 先销毁 stream，再销毁 Green Context
+//   bundle.deinitialize();                  // 先销毁 stream，再销毁 Green Context
 //
 // warmup（单次 nop_kernel launch）确保延迟初始化在计时区域外完成。
 struct GreenContextBundle {
@@ -424,7 +424,7 @@ struct GreenContextBundle {
     MUdevResource smResource{};       // 分配给该分区的 SM 资源
     unsigned int smCount = 0;         // 实际 SM 数量（创建后从驱动获取）
 
-    void create(MUdevice dev, const MUdevResource& smRes) {
+    void initialize(MUdevice dev, const MUdevResource& smRes) {
         // 步骤 1：从 SM 资源生成资源描述符
         MUdevResourceDesc desc{};
         MUdevResource mutableRes = smRes;
@@ -450,9 +450,16 @@ struct GreenContextBundle {
         checkMusaErrors(musaStreamSynchronize(runtime_stream(stream)));
     }
 
-    void destroy() {
+    void deinitialize() {
         if (stream != nullptr) {
             checkMuErrors(muStreamDestroy(stream));
+        }
+        if (ctx != nullptr) {
+            MUcontext current = nullptr;
+            checkMuErrors(muCtxGetCurrent(&current));
+            if (current == ctx) {
+                checkMuErrors(muCtxSetCurrent(nullptr));
+            }
         }
         if (greenCtx != nullptr) {
             checkMuErrors(muGreenCtxDestroy(greenCtx));

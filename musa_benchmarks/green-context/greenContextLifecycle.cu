@@ -106,17 +106,17 @@ public:
     // 使用 CPU 高精度计时器测量总墙钟时间。
     //
     // 每次迭代的协议：
-    //   1. 创建 critical GreenContextBundle（在 m_CriticalSm 上调用 create()）
-    //   2. 创建 bulk GreenContextBundle（在 m_BulkSm 上调用 create()）
+    //   1. 初始化 critical GreenContextBundle（在 m_CriticalSm 上调用 initialize()）
+    //   2. 初始化 bulk GreenContextBundle（在 m_BulkSm 上调用 initialize()）
     //   3. musaDeviceSynchronize() — 排空所有待处理工作
     //   4. 销毁 bulk bundle
     //   5. 销毁 critical bundle
     //
-    // 步骤 3 的同步确保每次迭代是自包含的：create() 内部的 nop_kernel
+    // 步骤 3 的同步确保每次迭代是自包含的：initialize() 内部的 nop_kernel
     // warmup 在销毁前完成。
     //
     // 每个 GreenContextBundle 是栈上局部对象，因此其析构函数不会调用
-    // destroy()——我们在循环内显式调用 destroy() 以将其包含在计时区域内。
+    // deinitialize()——我们在循环内显式调用 deinitialize() 以将其包含在计时区域内。
     void measureCreateDestroy() {
         constexpr int repeat = 10;
         CPerfCounter timer;
@@ -124,11 +124,11 @@ public:
         for (int i = 0; i < repeat; ++i) {
             GreenContextBundle critical{};
             GreenContextBundle bulk{};
-            critical.create(m_Device, m_CriticalSm);
-            bulk.create(m_Device, m_BulkSm);
+            critical.initialize(m_Device, m_CriticalSm);
+            bulk.initialize(m_Device, m_BulkSm);
             checkMusaErrors(musaDeviceSynchronize());
-            critical.destroy();
-            bulk.destroy();
+            critical.deinitialize();
+            bulk.deinitialize();
         }
         timer.Stop();
 

@@ -110,8 +110,8 @@ public:
 
         // 步骤 5：为 critical 和 bulk 域创建 Green Context 分区。
         // 每次创建包含一次 nop_kernel warmup，以强制完成延迟初始化。
-        m_GreenCritical.create(m_Device, m_CriticalSm);
-        m_GreenBulk.create(m_Device, m_BulkSm);
+        m_GreenCritical.initialize(m_Device, m_CriticalSm);
+        m_GreenBulk.initialize(m_Device, m_BulkSm);
         if (m_GreenCritical.smCount != m_CriticalSm.sm.smCount ||
             m_GreenBulk.smCount != m_BulkSm.sm.smCount) {
             std::cerr << "Green Context provisioned SM count does not match split result"
@@ -170,8 +170,8 @@ public:
         }
 
         // 销毁 Green Context 分区（同时销毁内部 stream）。
-        m_GreenCritical.destroy();
-        m_GreenBulk.destroy();
+        m_GreenCritical.deinitialize();
+        m_GreenBulk.deinitialize();
 
         // 释放 primary context（来自基类）。
         tearDownSmPartition();
